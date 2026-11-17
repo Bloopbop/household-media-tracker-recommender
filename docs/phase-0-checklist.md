@@ -35,9 +35,12 @@ Safari.
    The four Services checks should pass and a poster should appear.
 6. Close the app completely (swipe it away) and reopen it. "Data survives
    closing the app" should pass and the launch number should have gone up.
-7. Turn on airplane mode, with Wi-Fi off as well. Close the app completely and
-   reopen it. Both Offline checks should pass and the poster should still show.
-   Turn airplane mode off.
+   The launch number is at the top of the page, beside the count of passed
+   checks.
+7. Turn on airplane mode, and check that Wi-Fi is off as well: some phones
+   leave it connected. Close the app completely and reopen it. The pill at the
+   top should read **No network**, both Offline checks should pass, and the
+   poster should still show. Turn airplane mode off.
 8. Restart the phone and open the app. The launch number should continue from
    where it was, not start again at 1, and the keys should still be filled in.
 9. Leave the app unopened for a day, then open it. The launch number should
