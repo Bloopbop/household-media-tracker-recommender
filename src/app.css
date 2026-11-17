@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2;
+  --panel: #ffffff;
+  --text: #1b1d21;
+  --muted: #5d6470;
+  --line: #dcdad4;
+  --accent: #1b1d21;
+  --on-accent: #ffffff;
+  --good: #1f7a45;
+  --warn: #9a6200;
+  --bad: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f25;
+    --text: #eceae4;
+    --muted: #9aa1ad;
+    --line: #2e333c;
+    --accent: #e8b04a;
+    --on-accent: #14161a;
+    --good: #5fc98b;
+    --warn: #e8b04a;
+    --bad: #f2867f;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.45;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+button,
+input,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
