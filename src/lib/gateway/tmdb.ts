@@ -184,9 +184,11 @@ export function normalizeSearchResult(raw: Raw, fallbackKind?: Kind): SearchResu
     kind,
     tmdbId: id,
     name,
+    originalName: kind === 'movie' ? str(raw.original_title) : str(raw.original_name),
     year: yearOf(kind === 'movie' ? raw.release_date : raw.first_air_date),
     posterPath: str(raw.poster_path) || null,
     popularity: num(raw.popularity) ?? 0,
+    originCountry: Array.isArray(raw.origin_country) ? (raw.origin_country as unknown[]).map(str).filter(Boolean) : [],
   };
 }
 

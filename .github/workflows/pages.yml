@@ -25,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      - run: python3 -m unittest discover -s tools
       - run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/

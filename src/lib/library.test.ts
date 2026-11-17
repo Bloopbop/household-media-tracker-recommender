@@ -26,10 +26,16 @@ const items = [
   item({ name: 'Alpha', year: 1999, createdAt: 3, genres: ['Drama'], ratings: { US: 9 }, status: { A: 'watched', B: 'watched' } }),
   item({ name: 'Bravo', kind: 'series', year: 2015, createdAt: 2, genres: ['Crime', 'Drama'], ratings: { US: 7, B: 9.5 }, status: { B: 'watched', A: 'watchlist' } }),
   item({ name: 'Ça va', year: 2021, createdAt: 1, ratings: { A: 6 }, status: { A: 'watched' }, notes: 'Rewatch with subtitles' }),
+  item({ name: 'Delta', createdAt: 0, status: { A: 'not_interested', B: 'not_interested' } }),
 ];
 const names = (list: LibraryItem[]) => list.map((entry) => entry.name);
 
 describe('library filters', () => {
+  it('keeps titles marked only "not interested" out of the default view', () => {
+    expect(names(filterLibrary([...items], DEFAULT_FILTERS))).not.toContain('Delta');
+    expect(names(filterLibrary([...items], { ...DEFAULT_FILTERS, status: 'not_interested' }))).toEqual(['Delta']);
+  });
+
   it('sorts newest additions first by default', () => {
     expect(names(filterLibrary([...items], DEFAULT_FILTERS))).toEqual(['Alpha', 'Bravo', 'Ça va']);
   });

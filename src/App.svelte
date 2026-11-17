@@ -9,6 +9,8 @@
   import { app, loadConfig } from './lib/state.svelte';
   import About from './views/About.svelte';
   import AddTitle from './views/AddTitle.svelte';
+  import AgreeAdjust from './views/AgreeAdjust.svelte';
+  import ImportVault from './views/ImportVault.svelte';
   import DeviceCheck from './views/DeviceCheck.svelte';
   import Library from './views/Library.svelte';
   import Recommend from './views/Recommend.svelte';
@@ -18,7 +20,7 @@
   const tab = $derived.by(() => {
     const name = router.route.name;
     if (name === 'recommend') return 'recommend';
-    if (name === 'settings' || name === 'device-check' || name === 'about') return 'settings';
+    if (name === 'settings' || name === 'device-check' || name === 'about' || name === 'import') return 'settings';
     return 'library';
   });
 
@@ -81,6 +83,10 @@
       <DeviceCheck />
     {:else if router.route.name === 'about'}
       <About />
+    {:else if router.route.name === 'import'}
+      <ImportVault />
+    {:else if router.route.name === 'agree'}
+      <AgreeAdjust person={router.route.person} />
     {/if}
   </div>
 

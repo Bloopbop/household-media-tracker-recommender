@@ -86,6 +86,58 @@ export const HOUSEHOLD_MIGRATIONS: string[] = [
   );
   CREATE INDEX title_note_title ON title_note (title_id);
   `,
+
+  // 3. Phase 1 vault import. source_ref ties a title to the vault note it
+  // came from, so importing an updated vault adds only what is new.
+  `
+  ALTER TABLE title ADD COLUMN source_ref TEXT;
+  CREATE INDEX title_source_ref ON title (source_ref) WHERE source_ref IS NOT NULL;
+
+  CREATE TABLE pool_seed (
+    id              TEXT PRIMARY KEY,
+    kind            TEXT NOT NULL CHECK (kind IN ('movie', 'series')),
+    name            TEXT NOT NULL,
+    year            INTEGER,
+    tmdb_id         INTEGER,
+    tmdb_checked_at INTEGER,
+    source          TEXT NOT NULL,
+    source_ref      TEXT,
+    match_score     TEXT,
+    added_at        INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX pool_seed_tmdb ON pool_seed (kind, tmdb_id) WHERE tmdb_id IS NOT NULL;
+  CREATE INDEX pool_seed_source_ref ON pool_seed (source_ref) WHERE source_ref IS NOT NULL;
+
+  CREATE TABLE import_row (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch      TEXT NOT NULL,
+    row_type   TEXT NOT NULL CHECK (row_type IN ('library', 'candidate', 'not_interested')),
+    source_ref TEXT NOT NULL UNIQUE,
+    data       TEXT NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ('pending', 'imported', 'review', 'skipped')),
+    title_id   TEXT,
+    reason     TEXT,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX import_row_state ON import_row (state);
+
+  CREATE TABLE import_check (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch      TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    issue      TEXT NOT NULL,
+    detail     TEXT NOT NULL,
+    done       INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
+    updated_at INTEGER NOT NULL,
+    UNIQUE (source_ref, issue)
+  );
+
+  CREATE TABLE import_skip (
+    source_ref TEXT PRIMARY KEY,
+    skipped_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export const CACHE_MIGRATIONS: string[] = [
@@ -112,6 +164,15 @@ export const CACHE_MIGRATIONS: string[] = [
   CREATE TABLE cache.gateway_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  );
+  `,
+
+  // 2. TMDB matches offered for import rows that need a person to choose.
+  `
+  CREATE TABLE cache.import_match (
+    row_id     INTEGER PRIMARY KEY,
+    data       TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
   );
   `,
 ];

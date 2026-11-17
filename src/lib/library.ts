@@ -44,12 +44,19 @@ function matchesPerson(item: LibraryItem, filters: LibraryFilters): boolean {
   }
 }
 
+/** Titles someone only marked "not interested" stay out of view unless that status is chosen. */
+export function onlyNotInterested(item: LibraryItem): boolean {
+  const statuses = Object.values(item.status);
+  return statuses.length > 0 && statuses.every((status) => status === 'not_interested') && Object.keys(item.ratings).length === 0;
+}
+
 const fold = (text: string) => text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
 
 export function filterLibrary(items: LibraryItem[], filters: LibraryFilters): LibraryItem[] {
   const query = fold(filters.query.trim());
   const result = items.filter(
     (item) =>
+      (filters.status !== 'any' || !onlyNotInterested(item)) &&
       matchesPerson(item, filters) &&
       (filters.kind === 'any' || item.kind === filters.kind) &&
       (!filters.genre || item.genres.includes(filters.genre)) &&

@@ -3,10 +3,30 @@
 A private, local-first app for two people to track what they watch and decide
 what to watch next. All household data stays on the device.
 
-**Status: phase 1, part 1.** The library works: add titles by search or by
-name, rate them (an agreed rating plus personal ones), track status, notes and
-watches, and make or restore backups. Importing the household's Obsidian vault
-comes in part 2. Recommendations arrive in phase 2.
+**Status: phase 1.** The library works: add titles by search or by name, rate
+them (an agreed rating plus personal ones), track status, notes and watches,
+import the household's Obsidian vault, review the shared ratings person by
+person, and make or restore backups. Recommendations arrive in phase 2.
+
+## Importing the Obsidian vault
+
+1. Convert the vault on a computer (Python 3.8 or later, no packages needed):
+
+   ```bash
+   python3 tools/convert_vault.py /path/to/obsidian_tvmovies --out ./import
+   ```
+
+   This writes four CSV files to read, plus `vault-import.json`, which holds
+   the same rows in one file. The converter never writes inside the vault.
+2. Move `vault-import.json` to the phone, then in the app go to
+   Settings → Import from the vault and choose it.
+3. The app matches each title to TMDB, accepting only unambiguous matches.
+   Anything else waits in a list for you to choose, and the converter's
+   checklist appears below it.
+
+Importing fills gaps and never overwrites: ratings, statuses and notes already
+in the app are kept. Each title remembers the vault note it came from, so
+importing an updated vault later adds only what is new.
 
 The phase 0 device check is still in the app under Settings → Device check; see
 [docs/phase-0-checklist.md](docs/phase-0-checklist.md).
@@ -47,6 +67,7 @@ npm install
 npm run dev      # local development server
 npm run check    # type checks
 npm test         # unit tests
+python3 -m unittest discover -s tools   # converter tests
 npm run build    # production build in dist/
 npm run preview  # serve the production build locally
 ```

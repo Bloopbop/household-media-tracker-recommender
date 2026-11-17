@@ -245,6 +245,15 @@
   </div>
 </section>
 
+<section aria-labelledby="history">
+  <h2 id="history">Your history</h2>
+  <div class="panel form">
+    <p class="small">
+      <a {...nav({ name: 'import' })}>Import from the vault</a> · <a {...nav({ name: 'agree', person: 'A' })}>Review shared ratings</a>
+    </p>
+  </div>
+</section>
+
 <section aria-labelledby="device">
   <h2 id="device">This device</h2>
   <div class="panel form">

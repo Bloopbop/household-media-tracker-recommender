@@ -16,6 +16,8 @@ export const app = $state({
   online: navigator.onLine,
   /** Short status line from the background refresh, or ''. */
   refreshStatus: '',
+  /** Vault import matching in progress, or null. */
+  importProgress: null as { done: number; total: number } | null,
 });
 
 export function changed(): void {
