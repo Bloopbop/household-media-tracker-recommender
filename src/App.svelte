@@ -10,6 +10,7 @@
     checkTmdb,
     checkTvmaze,
     clearPosterCache,
+    hasNoNetwork,
     isStandalone,
     posterUrl,
     readCachedPoster,
@@ -65,6 +66,11 @@
   const when = (iso: string | null | undefined) =>
     iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'unknown';
 
+  /** Updates the Online / No network state from a real connection test. */
+  async function refreshNetwork() {
+    online = !(await hasNoNetwork());
+  }
+
   async function record(id: string, outcome: Outcome) {
     const check = checks.find((item) => item.id === id);
     if (!check) return;
@@ -76,6 +82,7 @@
   }
 
   async function start() {
+    await refreshNetwork();
     await record('install', checkInstall());
     await record('shell', await checkServiceWorker());
 
@@ -91,7 +98,7 @@
 
       await exec('INSERT INTO spike_boot (at, online, standalone) VALUES (?, ?, ?)', [
         new Date().toISOString(),
-        navigator.onLine ? 1 : 0,
+        online ? 1 : 0,
         isStandalone() ? 1 : 0,
       ]);
       const [row] = await exec<{ n: number; first: string; previous: string | null }>(
@@ -132,13 +139,13 @@
 
   async function checkOfflineState() {
     const now = new Date().toISOString();
-    if (!navigator.onLine) await setSetting('offline_seen', now);
+    if (!online) await setSetting('offline_seen', now);
     const offlineSeen = await getSetting('offline_seen');
     if (offlineSeen) await record('offline', { status: 'pass', detail: `Opened with no network on ${when(offlineSeen)}.` });
 
     const url = await getSetting('poster_url');
     if (url) posterSrc = await readCachedPoster(url);
-    if (posterSrc && !navigator.onLine) await setSetting('poster_offline_seen', now);
+    if (posterSrc && !online) await setSetting('poster_offline_seen', now);
     const posterSeen = await getSetting('poster_offline_seen');
     if (posterSeen) {
       await record('posterOffline', { status: 'pass', detail: `Shown from the cache with no network on ${when(posterSeen)}.` });
@@ -178,14 +185,19 @@
   }
 
   async function requestPersistence() {
-    await record('persist', await checkPersistence(true));
+    const outcome = await checkPersistence(true);
+    // Browsers answer this request silently, so say what the answer was.
+    if (outcome.status !== 'pass') {
+      outcome.detail = `Asked at ${new Date().toLocaleTimeString()} and the browser declined. ${outcome.detail}`;
+    }
+    await record('persist', outcome);
   }
 
   function summary(): string {
     const lines = [
       `Phase 0 results, ${new Date().toISOString()}`,
       `Device: ${navigator.userAgent}`,
-      `Installed: ${isStandalone() ? 'yes' : 'no'}; launches recorded: ${launches}; online now: ${navigator.onLine ? 'yes' : 'no'}`,
+      `Installed: ${isStandalone() ? 'yes' : 'no'}; launches recorded: ${launches}; online now: ${online ? 'yes' : 'no'}`,
       '',
       ...checks.map((check) => `[${STATUS_WORD[check.status].toUpperCase()}] ${check.label}: ${check.detail}`),
     ];
@@ -222,7 +234,7 @@
   const passed = $derived(checks.filter((check) => check.status === 'pass').length);
 
   onMount(() => {
-    const update = () => (online = navigator.onLine);
+    const update = () => void refreshNetwork();
     addEventListener('online', update);
     addEventListener('offline', update);
     void start();
@@ -243,6 +255,7 @@
     </p>
     <p class="score" aria-live="polite">
       <strong>{passed}</strong> of {checks.length} checks passed
+      {#if launches > 0}<span class="launch">Launch {launches}</span>{/if}
       <span class="net" class:offline={!online}>{online ? 'Online' : 'No network'}</span>
     </p>
   </header>
@@ -358,8 +371,12 @@
   .score strong {
     font-size: 1.4rem;
   }
-  .net {
+  .launch {
     margin-left: auto;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .net {
     padding: 0.15rem 0.6rem;
     border: 1px solid var(--line);
     border-radius: 999px;
