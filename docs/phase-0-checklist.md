@@ -26,7 +26,11 @@ Safari.
    - Galaxy: the browser menu, then Install app or Add to Home screen.
 3. Open the app from its home-screen icon. If "Offline shell installed" says
    to reload, close the app and open it again.
-4. Tap **Ask the browser to protect storage**.
+4. Look at "Storage protected from eviction".
+   - If it shows **Pass**, the browser has already granted it. There is no
+     button and nothing to do.
+   - If it shows **Check**, tap **Ask the browser to protect storage**. The
+     line under the check then says whether the browser granted or declined.
 5. Paste both keys, check the country code, and tap **Run online checks**.
    The four Services checks should pass and a poster should appear.
 6. Close the app completely (swipe it away) and reopen it. "Data survives

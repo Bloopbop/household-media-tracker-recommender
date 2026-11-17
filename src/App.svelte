@@ -178,7 +178,12 @@
   }
 
   async function requestPersistence() {
-    await record('persist', await checkPersistence(true));
+    const outcome = await checkPersistence(true);
+    // Browsers answer this request silently, so say what the answer was.
+    if (outcome.status !== 'pass') {
+      outcome.detail = `Asked at ${new Date().toLocaleTimeString()} and the browser declined. ${outcome.detail}`;
+    }
+    await record('persist', outcome);
   }
 
   function summary(): string {
