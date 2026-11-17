@@ -8,7 +8,9 @@ export type Route =
   | { name: 'add'; query: string; link?: string }
   | { name: 'settings' }
   | { name: 'device-check' }
-  | { name: 'about' };
+  | { name: 'about' }
+  | { name: 'import' }
+  | { name: 'agree'; person: 'A' | 'B' };
 
 export const HOME: Route = { name: 'library' };
 
@@ -27,6 +29,10 @@ export function parseRoute(hash: string): Route {
       const link = params.get('link') ?? undefined;
       return link ? { name: 'add', query: params.get('q') ?? '', link } : { name: 'add', query: params.get('q') ?? '' };
     }
+    case 'import':
+      return { name: 'import' };
+    case 'agree':
+      return { name: 'agree', person: params.get('person') === 'B' ? 'B' : 'A' };
     case 'settings':
       return parts[1] === 'device-check' ? { name: 'device-check' } : parts[1] === 'about' ? { name: 'about' } : { name: 'settings' };
     default:
@@ -53,5 +59,9 @@ export function href(route: Route): string {
       return '#/settings/device-check';
     case 'about':
       return '#/settings/about';
+    case 'import':
+      return '#/import';
+    case 'agree':
+      return `#/agree?person=${route.person}`;
   }
 }

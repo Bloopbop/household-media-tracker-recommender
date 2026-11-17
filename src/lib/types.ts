@@ -124,9 +124,12 @@ export interface SearchResult {
   kind: Kind;
   tmdbId: number;
   name: string;
+  originalName: string;
   year: number | null;
   posterPath: string | null;
   popularity: number;
+  /** Series only: where it was made, as ISO country codes. */
+  originCountry: string[];
 }
 
 /** Everything the title page shows about one title. */

@@ -290,8 +290,9 @@ function stateStatement(person: ProfileId, titleId: string, status: Status | nul
   };
 }
 
-export async function setRating(rater: Rater, titleId: string, score: number | null): Promise<void> {
-  await batch([ratingStatement(rater, titleId, score, 'manual')]);
+/** source records how the rating was given: 'manual', or 'agree' / 'adjust' from the shared-ratings review. */
+export async function setRating(rater: Rater, titleId: string, score: number | null, source = 'manual'): Promise<void> {
+  await batch([ratingStatement(rater, titleId, score, source)]);
 }
 
 export async function setStatus(person: ProfileId, titleId: string, status: Status | null): Promise<void> {

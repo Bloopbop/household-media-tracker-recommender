@@ -61,12 +61,19 @@ async function clearFailure(source: string, key: string): Promise<void> {
 export async function purgeExpired(now = Date.now()): Promise<number> {
   const cutoff = now - TMDB_LIMIT_DAYS * DAY_MS;
   const [rows] = await exec<{ n: number }>('SELECT COUNT(*) AS n FROM cache.tmdb_title WHERE fetched_at < ?', [cutoff]);
-  const [ids] = await exec<{ n: number }>('SELECT COUNT(*) AS n FROM title WHERE tmdb_checked_at < ?', [cutoff]);
+  const [ids] = await exec<{ n: number }>(
+    `SELECT (SELECT COUNT(*) FROM title WHERE tmdb_checked_at < ?) + (SELECT COUNT(*) FROM pool_seed WHERE tmdb_checked_at < ?)
+          + (SELECT COUNT(*) FROM cache.import_match WHERE fetched_at < ?) AS n`,
+    [cutoff, cutoff, cutoff],
+  );
   if (rows.n === 0 && ids.n === 0) return 0;
   await exec('DELETE FROM cache.tmdb_title WHERE fetched_at < ?', [cutoff]);
   // The household keeps the title's name and year; the TMDB link is dropped
   // and found again from the IMDb id at the next refresh.
   await exec('UPDATE title SET tmdb_id = NULL, tmdb_checked_at = NULL WHERE tmdb_checked_at < ?', [cutoff]);
+  // Recommendations keep their name and year; phase 2 matches them again.
+  await exec('UPDATE pool_seed SET tmdb_id = NULL, tmdb_checked_at = NULL WHERE tmdb_checked_at < ?', [cutoff]);
+  await exec('DELETE FROM cache.import_match WHERE fetched_at < ?', [cutoff]);
   changed();
   return rows.n + ids.n;
 }

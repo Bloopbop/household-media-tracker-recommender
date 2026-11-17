@@ -13,6 +13,9 @@ describe('routes', () => {
       { name: 'settings' },
       { name: 'device-check' },
       { name: 'about' },
+      { name: 'import' },
+      { name: 'agree', person: 'A' },
+      { name: 'agree', person: 'B' },
     ];
     for (const route of routes) expect(parseRoute(href(route))).toEqual(route);
   });

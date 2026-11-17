@@ -3,6 +3,7 @@
   import { getSetting } from '../lib/db';
   import { DEFAULT_FILTERS, filterLibrary, genresIn, shownRating, type LibraryFilters } from '../lib/library';
   import { formatRating } from '../lib/ratings';
+  import { importStatus, type ImportStatus } from '../lib/importer';
   import { listLibrary } from '../lib/repo';
   import { nav } from '../lib/router.svelte';
   import { app } from '../lib/state.svelte';
@@ -14,6 +15,7 @@
   let items = $state<LibraryItem[]>([]);
   let loaded = $state(false);
   let backupDue = $state(false);
+  let imports = $state<ImportStatus | null>(null);
 
   $effect(() => {
     void app.version;
@@ -27,6 +29,7 @@
   async function load() {
     items = await listLibrary();
     loaded = true;
+    imports = await importStatus();
     const last = Number((await getSetting('last_backup_at')) ?? 0);
     backupDue = items.length > 0 && Date.now() - last > 30 * 86_400_000;
   }
@@ -34,6 +37,13 @@
   const shown = $derived(filterLibrary([...items], filters));
   const genres = $derived(genresIn(items));
   const unmatched = $derived(items.filter((item) => item.tmdbId == null));
+  const toReview = $derived({
+    A: items.filter((item) => item.ratings.US != null && item.ratings.A == null).length,
+    B: items.filter((item) => item.ratings.US != null && item.ratings.B == null).length,
+  });
+  const importOpen = $derived(
+    app.importProgress != null || (imports != null && (imports.pending > 0 || imports.review > 0 || imports.checksOpen > 0)),
+  );
   const activeFilters = $derived(
     [filters.person !== 'any', filters.status !== 'any', filters.kind !== 'any', filters.genre !== ''].filter(Boolean).length,
   );
@@ -66,6 +76,32 @@
 {#if backupDue}
   <p class="notice">
     No backup in the last 30 days. <a {...nav({ name: 'settings' })}>Save one in Settings</a>.
+  </p>
+{/if}
+
+{#if importOpen && imports}
+  <p class="notice">
+    {#if app.importProgress}
+      Importing the vault: matching {app.importProgress.done} of {app.importProgress.total}.
+    {:else}
+      Vault import:
+      {[
+        imports.pending ? `${imports.pending} still to match` : '',
+        imports.review ? `${imports.review} to choose` : '',
+        imports.checksOpen ? `${imports.checksOpen} to check` : '',
+      ]
+        .filter(Boolean)
+        .join(', ')}.
+    {/if}
+    <a {...nav({ name: 'import' })}>Open the import</a>
+  </p>
+{/if}
+
+{#if toReview.A > 0 || toReview.B > 0}
+  <p class="notice">
+    Shared ratings to review:
+    <a {...nav({ name: 'agree', person: 'A' })}>{app.profiles.A}, {toReview.A} left</a> ·
+    <a {...nav({ name: 'agree', person: 'B' })}>{app.profiles.B}, {toReview.B} left</a>
   </p>
 {/if}
 
@@ -166,8 +202,11 @@
 {:else if loaded}
   <div class="empty">
     <p>Nothing here yet.</p>
-    <p class="muted small">Add something you have watched, or something you want to watch. Importing your vault comes in the next update.</p>
-    <a class="button" {...nav({ name: 'add', query: '' })}>Add a title</a>
+    <p class="muted small">Import your Obsidian vault, or add something you have watched or want to watch.</p>
+    <div class="empty-actions">
+      <a class="button" {...nav({ name: 'import' })}>Import the vault</a>
+      <a class="button secondary" {...nav({ name: 'add', query: '' })}>Add a title</a>
+    </div>
   </div>
 {/if}
 
@@ -269,6 +308,12 @@
   }
   .empty p {
     margin: 0 0 0.75rem;
+  }
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
   }
   @media (min-width: 40rem) {
     .filters {
