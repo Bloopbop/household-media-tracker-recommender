@@ -1,3 +1,5 @@
+/// <reference types="vitest/config" />
+import { readFileSync } from 'node:fs';
 import { env } from 'node:process';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
@@ -6,6 +8,13 @@ import { VitePWA } from 'vite-plugin-pwa';
 // GitHub Pages serves the app under /<repository-name>/. The deploy workflow
 // sets BASE_PATH; local development uses the root.
 const base = env.BASE_PATH ?? '/';
+
+// Shown in Settings, so a phone's installed version can be checked.
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
+const appVersion = `${version} (${env.GITHUB_SHA?.slice(0, 7) ?? 'local'})`;
+
+// Posters expire well before TMDB's six-month caching limit (see gateway/policy.ts).
+const POSTER_MAX_AGE_DAYS = 170;
 
 // The only hosts the app may talk to. This is the browser-enforced version of
 // the "enrichment gateway" boundary in the spec.
@@ -38,6 +47,7 @@ function contentSecurityPolicy(): Plugin {
 
 export default defineConfig({
   base,
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   plugins: [
     svelte(),
     contentSecurityPolicy(),
@@ -65,9 +75,28 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,wasm}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         cleanupOutdatedCaches: true,
+        // The manifest probe in network.ts must always reach the network.
+        ignoreURLParametersMatching: [/^probe$/],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.origin === 'https://image.tmdb.org',
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'tmdb-posters',
+              // Only readable (CORS) responses: opaque ones would count as megabytes each.
+              cacheableResponse: { statuses: [200] },
+              expiration: {
+                maxEntries: 4000,
+                maxAgeSeconds: POSTER_MAX_AGE_DAYS * 24 * 60 * 60,
+                purgeOnQuotaError: true,
+              },
+            },
+          },
+        ],
       },
     }),
   ],
   worker: { format: 'es' },
   optimizeDeps: { exclude: ['@sqlite.org/sqlite-wasm'] },
+  test: { include: ['src/**/*.test.ts'], environment: 'node' },
 });

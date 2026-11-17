@@ -3,8 +3,12 @@
 A private, local-first app for two people to track what they watch and decide
 what to watch next. All household data stays on the device.
 
-**Status: phase 0.** The app is currently a single test page that checks whether
-the target phones can run the planned design. See
+**Status: phase 1, part 1.** The library works: add titles by search or by
+name, rate them (an agreed rating plus personal ones), track status, notes and
+watches, and make or restore backups. Importing the household's Obsidian vault
+comes in part 2. Recommendations arrive in phase 2.
+
+The phase 0 device check is still in the app under Settings → Device check; see
 [docs/phase-0-checklist.md](docs/phase-0-checklist.md).
 
 ## How it is built
@@ -21,7 +25,18 @@ The app talks to TMDB, OMDb and TVmaze directly from the browser. API keys are
 typed into the app and saved in the device's own database. They are never
 committed to this repository and never sent anywhere except to the service they
 belong to. A Content-Security-Policy in the built page limits network access to
-those services.
+those services. Backups leave out the keys and this device's own records.
+
+## Storage
+
+- `household.db`: the household's records. The source of truth, and the only
+  file in a backup.
+- `cache.db`: data fetched from TMDB and OMDb. Disposable; rebuilt by refreshing.
+  TMDB data is deleted once it reaches six months without a refresh, as TMDB's
+  API terms require. Posters are cached by the service worker for 170 days.
+
+Tests use hand-written sample data shaped like the services' documented
+responses; no live service data is kept in this repository.
 
 ## Development
 
@@ -31,6 +46,7 @@ Requires Node 22.
 npm install
 npm run dev      # local development server
 npm run check    # type checks
+npm test         # unit tests
 npm run build    # production build in dist/
 npm run preview  # serve the production build locally
 ```

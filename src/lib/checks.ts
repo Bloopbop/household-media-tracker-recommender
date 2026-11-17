@@ -21,25 +21,6 @@ function describeError(error: unknown): string {
 
 // ---------------------------------------------------------------- environment
 
-/**
- * True when the app's own site cannot be reached.
- *
- * `navigator.onLine` alone is not enough: it can stay true when the phone is
- * joined to a network with no working connection. So ask the site for a small
- * file, bypassing every cache. The query string keeps the service worker from
- * answering it.
- */
-export async function hasNoNetwork(): Promise<boolean> {
-  if (!navigator.onLine) return true;
-  try {
-    const probe = `${import.meta.env.BASE_URL}manifest.webmanifest?probe=${Date.now()}`;
-    await fetch(probe, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
-    return false;
-  } catch {
-    return true;
-  }
-}
-
 export function isStandalone(): boolean {
   const iosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
   return iosStandalone || matchMedia('(display-mode: standalone)').matches;
