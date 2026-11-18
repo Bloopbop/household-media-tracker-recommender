@@ -1,6 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { canShareFile, createBackupFile, downloadFile, recordBackup, restoreBackup, shareFile } from '../lib/backup';
+  import {
+    canShareFile,
+    createBackupFile,
+    downloadFile,
+    recordBackup,
+    restoreBackup,
+    shareFile,
+    ShareRefusedError,
+  } from '../lib/backup';
   import { clearCache, getSetting } from '../lib/db';
   import { omdbRemainingToday } from '../lib/gateway/omdb';
   import { clearPosters } from '../lib/gateway/posters';
@@ -19,6 +27,7 @@
   let storage = $state('');
   let refreshing = $state(false);
   let backupFile = $state<File | null>(null);
+  let shareRefused = $state(false);
   let restoreFile = $state<File | null>(null);
   let armed = $state('');
 
@@ -94,6 +103,7 @@
 
   async function saveBackup(share: boolean) {
     if (!backupFile) return;
+    const name = backupFile.name;
     try {
       if (share) {
         if (!(await shareFile(backupFile))) return;
@@ -101,11 +111,15 @@
         downloadFile(backupFile);
       }
       await recordBackup();
-      message.backup = `Backup made: ${backupFile.name}. Keep it somewhere other than this phone.`;
+      const opens = 'It opens only in this app, with Restore below.';
+      message.backup = share
+        ? `Shared ${name}. Keep a copy somewhere other than this phone. ${opens}`
+        : `Saved ${name} to this phone's downloads. Copy it somewhere other than this phone, such as Google Drive or a computer. ${opens}`;
       backupFile = null;
       await loadStatus();
       changed();
     } catch (error) {
+      if (error instanceof ShareRefusedError) shareRefused = true;
       message.backup = error instanceof Error ? error.message : String(error);
     }
   }
@@ -213,7 +227,7 @@
     {#if backupFile}
       <div class="actions">
         <button type="button" onclick={() => saveBackup(false)}>Save the file</button>
-        {#if canShareFile(backupFile)}
+        {#if !shareRefused && canShareFile(backupFile)}
           <button type="button" class="secondary" onclick={() => saveBackup(true)}>Share…</button>
         {/if}
       </div>
