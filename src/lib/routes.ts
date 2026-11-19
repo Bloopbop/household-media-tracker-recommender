@@ -10,9 +10,12 @@ export type Route =
   | { name: 'device-check' }
   | { name: 'about' }
   | { name: 'import' }
-  | { name: 'agree'; person: 'A' | 'B' };
+  | { name: 'agree'; person: 'A' | 'B' }
+  | { name: 'pick'; key: string; mode: 'A' | 'B' | 'US' }
+  | { name: 'rec-check' };
 
-export const HOME: Route = { name: 'library' };
+/** The app opens on recommendations (spec, story R1). */
+export const HOME: Route = { name: 'recommend' };
 
 export function parseRoute(hash: string): Route {
   const [path, search = ''] = hash.replace(/^#/, '').split('?');
@@ -33,8 +36,15 @@ export function parseRoute(hash: string): Route {
       return { name: 'import' };
     case 'agree':
       return { name: 'agree', person: params.get('person') === 'B' ? 'B' : 'A' };
+    case 'pick': {
+      const mode = params.get('mode');
+      return parts[1] ? { name: 'pick', key: parts[1], mode: mode === 'A' || mode === 'B' ? mode : 'US' } : HOME;
+    }
     case 'settings':
-      return parts[1] === 'device-check' ? { name: 'device-check' } : parts[1] === 'about' ? { name: 'about' } : { name: 'settings' };
+      if (parts[1] === 'device-check') return { name: 'device-check' };
+      if (parts[1] === 'about') return { name: 'about' };
+      if (parts[1] === 'recommendation-check') return { name: 'rec-check' };
+      return { name: 'settings' };
     default:
       return HOME;
   }
@@ -63,5 +73,9 @@ export function href(route: Route): string {
       return '#/import';
     case 'agree':
       return `#/agree?person=${route.person}`;
+    case 'pick':
+      return `#/pick/${encodeURIComponent(route.key)}?mode=${route.mode}`;
+    case 'rec-check':
+      return '#/settings/recommendation-check';
   }
 }

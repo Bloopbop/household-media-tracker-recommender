@@ -9,7 +9,12 @@
     shareFile,
     ShareRefusedError,
   } from '../lib/backup';
-  import { clearCache, getSetting } from '../lib/db';
+  import { clearCache, exec, getSetting } from '../lib/db';
+  import { cachedProviders, fetchProviders, poolBuiltAt } from '../lib/gateway/pool';
+  import type { RegionProvider } from '../lib/gateway/tmdb';
+  import { logoUrl } from '../lib/gateway/tmdb';
+  import { getServiceChoice, setServices } from '../lib/rec/data';
+  import { markPoolDue, runRecJob } from '../lib/rec/job';
   import { omdbRemainingToday } from '../lib/gateway/omdb';
   import { clearPosters } from '../lib/gateway/posters';
   import { lastRefreshAt, refreshAll } from '../lib/gateway/refresh';
@@ -19,7 +24,12 @@
 
   let names = $state({ A: app.profiles.A, B: app.profiles.B });
   let keys = $state({ tmdbKey: app.tmdbKey, omdbKey: app.omdbKey, region: app.region });
-  let message = $state({ profiles: '', keys: '', refresh: '', backup: '', restore: '', cache: '' });
+  let message = $state({ profiles: '', keys: '', refresh: '', backup: '', restore: '', cache: '', services: '' });
+  let providers = $state<RegionProvider[]>([]);
+  let chosenServices = $state(new Set<number>());
+  let showAllServices = $state(false);
+  let loadingServices = $state(false);
+  let pool = $state({ gathered: 0, detailed: 0, builtAt: null as number | null });
   let counts = $state({ titles: 0, ratings: 0, unmatched: 0 });
   let lastBackup = $state<number | null>(null);
   let lastRefresh = $state<number | null>(null);
@@ -49,9 +59,59 @@
     }
   }
 
+  async function loadRecommendations() {
+    providers = await cachedProviders(app.region);
+    chosenServices = new Set(await getServiceChoice(app.region));
+    const [row] = await exec<{ gathered: number; detailed: number }>(
+      `SELECT (SELECT COUNT(*) FROM cache.pool) AS gathered,
+              (SELECT COUNT(*) FROM cache.pool p JOIN cache.title_feature f ON f.key = p.key) AS detailed`,
+    );
+    pool = { gathered: row.gathered, detailed: row.detailed, builtAt: await poolBuiltAt() };
+  }
+
   onMount(() => {
     void loadStatus();
+    void loadRecommendations();
   });
+
+  async function loadServices() {
+    loadingServices = true;
+    message.services = '';
+    try {
+      providers = await fetchProviders(app.region);
+      if (providers.length === 0) message.services = `TMDB lists no services for ${app.region}.`;
+    } catch (error) {
+      message.services = error instanceof Error ? error.message : String(error);
+    } finally {
+      loadingServices = false;
+    }
+  }
+
+  function toggleService(id: number, on: boolean) {
+    const next = new Set(chosenServices);
+    if (on) next.add(id);
+    else next.delete(id);
+    chosenServices = next;
+  }
+
+  async function saveServices() {
+    await setServices(app.region, [...chosenServices]);
+    await markPoolDue();
+    message.services = chosenServices.size
+      ? 'Saved. Picks on these services now rank higher; candidates from them are gathered at the next look.'
+      : 'Saved. With none ticked, any streaming service counts.';
+    void runRecJob().then(loadRecommendations);
+  }
+
+  async function gatherNow() {
+    await markPoolDue();
+    await runRecJob();
+    await loadRecommendations();
+  }
+
+  const shownProviders = $derived(
+    showAllServices ? providers : providers.filter((provider, index) => index < 24 || chosenServices.has(provider.id)),
+  );
 
   async function saveNames(event: SubmitEvent) {
     event.preventDefault();
@@ -69,6 +129,10 @@
     await saveConfig(keys);
     keys = { tmdbKey: app.tmdbKey, omdbKey: app.omdbKey, region: app.region };
     message.keys = regionChanged ? 'Saved. Availability updates for the new country at the next refresh.' : 'Saved.';
+    if (regionChanged) {
+      await markPoolDue();
+      await loadRecommendations();
+    }
   }
 
   async function refreshNow() {
@@ -217,6 +281,57 @@
   </div>
 </section>
 
+<section aria-labelledby="recommendations">
+  <h2 id="recommendations">Recommendations</h2>
+  <div class="panel form">
+    <p class="small">Your streaming services in {app.region}</p>
+    {#if providers.length > 0}
+      <div class="services">
+        {#each shownProviders as provider (provider.id)}
+          <label class="service">
+            <input
+              type="checkbox"
+              checked={chosenServices.has(provider.id)}
+              onchange={(event) => toggleService(provider.id, (event.currentTarget as HTMLInputElement).checked)}
+            />
+            {#if provider.logoPath}<img src={logoUrl(provider.logoPath)} alt="" crossorigin="anonymous" loading="lazy" width="24" height="24" />{/if}
+            <span>{provider.name}</span>
+          </label>
+        {/each}
+      </div>
+      {#if providers.length > 24}
+        <button type="button" class="link" onclick={() => (showAllServices = !showAllServices)}>
+          {showAllServices ? 'Show fewer' : `Show all ${providers.length}`}
+        </button>
+      {/if}
+      <div class="actions">
+        <button type="button" onclick={saveServices}>Save services</button>
+      </div>
+    {:else}
+      <button type="button" class="secondary" disabled={loadingServices || !app.online || !app.tmdbKey} onclick={loadServices}>
+        {loadingServices ? 'Loading…' : `Load the services for ${app.region}`}
+      </button>
+    {/if}
+    {#if message.services}<p class="small" role="status">{message.services}</p>{/if}
+    <p class="muted small">Picks you can stream on these rank higher. With none ticked, any streaming service counts.</p>
+  </div>
+
+  <div class="panel form">
+    <p class="small">
+      {pool.gathered.toLocaleString()} candidates gathered, {pool.detailed.toLocaleString()} with details{pool.builtAt
+        ? `; last gathered ${when(pool.builtAt)}`
+        : ''}. They are gathered again every week.
+    </p>
+    {#if app.recStatus}<p class="small muted" aria-live="polite">{app.recStatus}</p>{/if}
+    <div class="actions">
+      <button type="button" class="secondary" disabled={!app.online || !app.tmdbKey || app.recStatus !== ''} onclick={gatherNow}>
+        Gather candidates now
+      </button>
+    </div>
+    <p class="small"><a {...nav({ name: 'rec-check' })}>Recommendation check</a></p>
+  </div>
+</section>
+
 <section aria-labelledby="backup">
   <h2 id="backup">Backup</h2>
   <div class="panel form">
@@ -308,6 +423,32 @@
   }
   .short input {
     max-width: 6rem;
+  }
+  .services {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+    gap: 0.4rem 0.75rem;
+  }
+  .service {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    font-size: 0.9rem;
+  }
+  .service input {
+    width: 1.25rem;
+    height: 1.25rem;
+    min-height: 1.25rem;
+    flex: none;
+  }
+  .service img {
+    border-radius: 0.3rem;
+    flex: none;
+  }
+  .service span {
+    font-size: 0.9rem;
+    color: var(--text);
   }
   .actions {
     display: flex;

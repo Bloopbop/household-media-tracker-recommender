@@ -18,6 +18,16 @@ export const app = $state({
   refreshStatus: '',
   /** Vault import matching in progress, or null. */
   importProgress: null as { done: number; total: number } | null,
+  /** Short status line from the recommender's background work, or ''. */
+  recStatus: '',
+  /** The last error from the recommender's background work, or ''. */
+  recError: '',
+  /** Increments whenever new slates are saved. */
+  slatesVersion: 0,
+  /** How long the last slate build took, in milliseconds. */
+  lastSlateBuildMs: null as number | null,
+  /** Milliseconds from opening the app to the first picks on screen, this session. */
+  slateShownMs: null as number | null,
 });
 
 export function changed(): void {

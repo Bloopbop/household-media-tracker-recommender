@@ -4,11 +4,12 @@
 // What to fetch is worked out from the data each time, so there is no queue
 // to fall out of step with the library.
 
-import { exec, getGatewayState, setGatewayState } from '../db';
+import { batch, exec, getGatewayState, setGatewayState } from '../db';
 import { linkTitle, markTmdbChecked, tmdbCacheKey } from '../repo';
 import { checkNetwork } from '../network';
+import { FEATURE_VERSION, featureRow } from '../rec/features';
 import { app, changed } from '../state.svelte';
-import type { Kind, OmdbScores, TmdbTitle } from '../types';
+import { TMDB_SHAPE_VERSION, type Kind, type OmdbScores, type TmdbTitle } from '../types';
 import { fetchOmdb, omdbRemainingToday } from './omdb';
 import { DAY_MS, isStale, omdbMaxAgeDays, retryDelayMs, TMDB_LIMIT_DAYS, tmdbMaxAgeDays } from './policy';
 import { prefetchPosters } from './posters';
@@ -26,15 +27,28 @@ export interface RefreshSummary {
 
 // -------------------------------------------------------------- cache store
 
+/** Stores a TMDB record, and the recommender's feature row built from it. */
 export async function saveTmdb(title: TmdbTitle, region: string): Promise<void> {
-  await exec(
-    `INSERT INTO cache.tmdb_title (key, data, region, fetched_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (key) DO UPDATE SET data = excluded.data, region = excluded.region, fetched_at = excluded.fetched_at`,
-    [tmdbCacheKey(title.kind, title.tmdbId), JSON.stringify(title), region, Date.now()],
-  );
+  const key = tmdbCacheKey(title.kind, title.tmdbId);
+  const at = Date.now();
+  const feature = featureRow(title);
+  await batch([
+    {
+      sql: `INSERT INTO cache.tmdb_title (key, data, region, fetched_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT (key) DO UPDATE SET data = excluded.data, region = excluded.region, fetched_at = excluded.fetched_at`,
+      bind: [key, JSON.stringify(title), region, at],
+    },
+    feature
+      ? {
+          sql: `INSERT INTO cache.title_feature (key, version, data, fetched_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT (key) DO UPDATE SET version = excluded.version, data = excluded.data, fetched_at = excluded.fetched_at`,
+          bind: [key, FEATURE_VERSION, JSON.stringify(feature), at],
+        }
+      : { sql: 'DELETE FROM cache.title_feature WHERE key = ?', bind: [key] },
+  ]);
 }
 
-async function saveOmdb(imdbId: string, scores: OmdbScores | null): Promise<void> {
+export async function saveOmdb(imdbId: string, scores: OmdbScores | null): Promise<void> {
   await exec(
     `INSERT INTO cache.omdb_rating (imdb_id, data, fetched_at) VALUES (?, ?, ?)
      ON CONFLICT (imdb_id) DO UPDATE SET data = excluded.data, fetched_at = excluded.fetched_at`,
@@ -42,7 +56,7 @@ async function saveOmdb(imdbId: string, scores: OmdbScores | null): Promise<void
   );
 }
 
-async function recordFailure(source: string, key: string, error: unknown): Promise<void> {
+export async function recordFailure(source: string, key: string, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const [row] = await exec<{ attempts: number }>('SELECT attempts FROM cache.fetch_failure WHERE source = ? AND key = ?', [source, key]);
   const attempts = (row?.attempts ?? 0) + 1;
@@ -53,13 +67,23 @@ async function recordFailure(source: string, key: string, error: unknown): Promi
   );
 }
 
-async function clearFailure(source: string, key: string): Promise<void> {
+export async function clearFailure(source: string, key: string): Promise<void> {
   await exec('DELETE FROM cache.fetch_failure WHERE source = ? AND key = ?', [source, key]);
 }
+
+/** Slates are kept this long for the monthly quality job, well inside TMDB's limit. */
+export const SLATE_KEEP_DAYS = 120;
 
 /** Deletes TMDB data that has reached the six-month limit. Returns how many items went. */
 export async function purgeExpired(now = Date.now()): Promise<number> {
   const cutoff = now - TMDB_LIMIT_DAYS * DAY_MS;
+  // Derived from TMDB, so held to the same limit (slates sooner).
+  await batch([
+    { sql: 'DELETE FROM cache.pool WHERE listed_at < ?', bind: [cutoff] },
+    { sql: 'DELETE FROM cache.provider WHERE fetched_at < ?', bind: [cutoff] },
+    { sql: 'DELETE FROM slate WHERE created_at < ?', bind: [now - SLATE_KEEP_DAYS * DAY_MS] },
+    { sql: 'DELETE FROM signal WHERE at < ?', bind: [cutoff] },
+  ]);
   const [rows] = await exec<{ n: number }>('SELECT COUNT(*) AS n FROM cache.tmdb_title WHERE fetched_at < ?', [cutoff]);
   const [ids] = await exec<{ n: number }>(
     `SELECT (SELECT COUNT(*) FROM title WHERE tmdb_checked_at < ?) + (SELECT COUNT(*) FROM pool_seed WHERE tmdb_checked_at < ?)
@@ -68,6 +92,7 @@ export async function purgeExpired(now = Date.now()): Promise<number> {
   );
   if (rows.n === 0 && ids.n === 0) return 0;
   await exec('DELETE FROM cache.tmdb_title WHERE fetched_at < ?', [cutoff]);
+  await exec('DELETE FROM cache.title_feature WHERE key NOT IN (SELECT key FROM cache.tmdb_title)');
   // The household keeps the title's name and year; the TMDB link is dropped
   // and found again from the IMDb id at the next refresh.
   await exec('UPDATE title SET tmdb_id = NULL, tmdb_checked_at = NULL WHERE tmdb_checked_at < ?', [cutoff]);
@@ -107,7 +132,10 @@ const WORK_SQL = `
 function tmdbIsStale(row: WorkRow, now: number): boolean {
   if (row.tmdb_id == null) return false;
   if (!row.tmdb_data) return true;
-  return isStale(row.tmdb_at, tmdbMaxAgeDays(JSON.parse(row.tmdb_data) as TmdbTitle, now), now);
+  const data = JSON.parse(row.tmdb_data) as TmdbTitle;
+  // Saved before the app kept the ids the recommender needs.
+  if ((data.version ?? 1) < TMDB_SHAPE_VERSION) return true;
+  return isStale(row.tmdb_at, tmdbMaxAgeDays(data, now), now);
 }
 
 async function refreshTmdb(row: WorkRow): Promise<{ imdbId: string | null; relinked: boolean }> {
@@ -227,6 +255,7 @@ async function runRefresh(onProgress: (text: string) => void): Promise<RefreshSu
       .filter((row) => row.imdb_id && due(row.omdb_retry) && isStale(row.omdb_at, omdbMaxAgeDays(row.year, now), now))
       .sort((a, b) => (a.omdb_at ?? 0) - (b.omdb_at ?? 0))
       .slice(0, await omdbRemainingToday());
+    let omdbStopped = false;
     for (const [index, row] of omdbWork.entries()) {
       onProgress(`Updating review scores: ${index + 1} of ${omdbWork.length}`);
       const imdbId = row.imdb_id as string;
@@ -237,9 +266,13 @@ async function runRefresh(onProgress: (text: string) => void): Promise<RefreshSu
       } catch (error) {
         summary.failures++;
         await recordFailure('omdb', imdbId, error);
-        if (error instanceof ServiceError && (error.status === 401 || error.status === 429)) break;
+        if (error instanceof ServiceError && (error.status === 401 || error.status === 429)) {
+          omdbStopped = true;
+          break;
+        }
       }
     }
+    if (!omdbStopped) summary.omdb += await fetchWantedOmdb(onProgress);
     if (summary.omdb > 0) changed();
   }
 
@@ -256,10 +289,57 @@ async function runRefresh(onProgress: (text: string) => void): Promise<RefreshSu
   return summary;
 }
 
-/** Runs the refresh at most once a day, when there is something to fetch with. */
+/**
+ * OMDb review scores for the best-scoring candidates (cache.omdb_wanted, saved
+ * with each new slate), within what is left of the day's allowance. Library
+ * titles go first, in refreshAll. Returns how many were fetched.
+ */
+export async function fetchWantedOmdb(onProgress: (text: string) => void = () => {}): Promise<number> {
+  if (!app.omdbKey) return 0;
+  const now = Date.now();
+  const rows = await exec<{ imdb_id: string; year: number | null; omdb_at: number | null; retry: number | null }>(
+    `SELECT w.imdb_id, json_extract(c.data, '$.year') AS year, o.fetched_at AS omdb_at, f.retry_after AS retry
+       FROM cache.omdb_wanted w
+       LEFT JOIN cache.tmdb_title c ON c.key = w.key
+       LEFT JOIN cache.omdb_rating o ON o.imdb_id = w.imdb_id
+       LEFT JOIN cache.fetch_failure f ON f.source = 'omdb' AND f.key = w.imdb_id
+      ORDER BY w.rank`,
+  );
+  const work = rows
+    .filter((row) => (row.retry == null || row.retry <= now) && isStale(row.omdb_at, omdbMaxAgeDays(row.year, now), now))
+    .slice(0, await omdbRemainingToday());
+  let fetched = 0;
+  for (const [index, row] of work.entries()) {
+    onProgress(`Getting review scores for candidates: ${index + 1} of ${work.length}`);
+    try {
+      await saveOmdb(row.imdb_id, await fetchOmdb(app.omdbKey, row.imdb_id));
+      await clearFailure('omdb', row.imdb_id);
+      fetched++;
+    } catch (error) {
+      await recordFailure('omdb', row.imdb_id, error);
+      if (error instanceof ServiceError && (error.status === 401 || error.status === 429)) break;
+    }
+  }
+  return fetched;
+}
+
+/** Library titles whose cached record predates the current shape. */
+async function outdatedLibraryRows(): Promise<number> {
+  const [row] = await exec<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM title t JOIN cache.tmdb_title c ON c.key = t.kind || ':' || t.tmdb_id
+      WHERE IFNULL(json_extract(c.data, '$.version'), 1) < ?`,
+    [TMDB_SHAPE_VERSION],
+  );
+  return row.n;
+}
+
+/**
+ * Runs the refresh at most once a day, when there is something to fetch with,
+ * or at once if the library's records need fetching again in a newer shape.
+ */
 export async function refreshIfDue(onProgress: (text: string) => void): Promise<RefreshSummary | undefined> {
   const last = Number((await getGatewayState('last_refresh_at')) ?? 0);
-  if (Date.now() - last < DAY_MS) {
+  if (Date.now() - last < DAY_MS && (await outdatedLibraryRows()) === 0) {
     await purgeExpired();
     return undefined;
   }

@@ -3,10 +3,29 @@
 A private, local-first app for two people to track what they watch and decide
 what to watch next. All household data stays on the device.
 
-**Status: phase 1.** The library works: add titles by search or by name, rate
-them (an agreed rating plus personal ones), track status, notes and watches,
-import the household's Obsidian vault, review the shared ratings person by
-person, and make or restore backups. Recommendations arrive in phase 2.
+**Status: phase 2, part 1.** The library works: add titles by search or by
+name, rate them (an agreed rating plus personal ones), track status, notes and
+watches, import the household's Obsidian vault, review the shared ratings person
+by person, and make or restore backups. The app opens on recommendations: up to
+20 picks for each person and for the two together, each with a one-line reason
+and a "Why this?" breakdown. Reacting to picks arrives in part 2.
+
+## Recommendations
+
+The recommender runs on the device and works offline from the last saved
+picks. When online, it gathers up to 3,000 candidates from TMDB each week
+(titles TMDB links to the ones you rated highly, searches on your favourite
+genres, themes and people, trending titles, your streaming services and the
+vault's recommendations) and fetches their details in the background. Each
+pick's score blends four parts: how close it is to what you liked, whether TMDB
+recommends it alongside titles you liked, review and audience scores, and
+(later) the other person's rating; then it is adjusted for where you can watch
+it. Four of the 20 places hold exploratory picks.
+
+Settings → Recommendation check runs the backtest that decides whether phase 2
+passes: it hides a fifth of your ratings, rebuilds the recommender without
+them, and compares its ranking with review scores alone. Its copied results are
+numbers only.
 
 ## Importing the Obsidian vault
 
@@ -51,9 +70,13 @@ those services. Backups leave out the keys and this device's own records.
 
 - `household.db`: the household's records. The source of truth, and the only
   file in a backup.
-- `cache.db`: data fetched from TMDB and OMDb. Disposable; rebuilt by refreshing.
-  TMDB data is deleted once it reaches six months without a refresh, as TMDB's
-  API terms require. Posters are cached by the service worker for 170 days.
+- `cache.db`: data fetched from TMDB and OMDb, and the recommender's candidates
+  and features built from it. Disposable; rebuilt by refreshing. TMDB data is
+  deleted once it reaches six months without a refresh, as TMDB's API terms
+  require. Posters are cached by the service worker for 170 days.
+- Saved picks (slates) live in `household.db` for the monthly quality check, are
+  deleted after 120 days, and are left out of backups because they are rebuilt
+  from the data.
 
 Tests use hand-written sample data shaped like the services' documented
 responses; no live service data is kept in this repository.

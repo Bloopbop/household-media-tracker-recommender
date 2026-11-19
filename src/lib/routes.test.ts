@@ -16,13 +16,17 @@ describe('routes', () => {
       { name: 'import' },
       { name: 'agree', person: 'A' },
       { name: 'agree', person: 'B' },
+      { name: 'pick', key: 'movie:550', mode: 'US' },
+      { name: 'pick', key: 'series:1396', mode: 'B' },
+      { name: 'rec-check' },
     ];
     for (const route of routes) expect(parseRoute(href(route))).toEqual(route);
   });
 
-  it('sends unknown or empty addresses to the library', () => {
-    expect(parseRoute('')).toEqual({ name: 'library' });
-    expect(parseRoute('#/nowhere')).toEqual({ name: 'library' });
-    expect(parseRoute('#/title/')).toEqual({ name: 'library' });
+  it('sends unknown or empty addresses to recommendations, the launch view', () => {
+    expect(parseRoute('')).toEqual({ name: 'recommend' });
+    expect(parseRoute('#/nowhere')).toEqual({ name: 'recommend' });
+    expect(parseRoute('#/title/')).toEqual({ name: 'recommend' });
+    expect(parseRoute('#/pick/movie%3A550')).toEqual({ name: 'pick', key: 'movie:550', mode: 'US' });
   });
 });
