@@ -18,6 +18,14 @@ export interface Weights {
 /** The spec's starting weights. Partner stays off until each person has 30 ratings of their own. */
 export const START_WEIGHTS: Weights = { content: 0.45, collaborative: 0.3, quality: 0.2, partner: 0.05 };
 
+/**
+ * Pool sources chosen without the household's taste. A title from any of them
+ * is a fair title to rank the household's favourites against, and the pool
+ * keeps them all whatever its size.
+ */
+export const NEUTRAL_SOURCES: ReadonlySet<string> = new Set(['trending', 'popular', 'services']);
+export const isNeutral = (sources: readonly string[]) => sources.some((source) => NEUTRAL_SOURCES.has(source));
+
 export type ComponentName = keyof Weights;
 export type Components = Partial<Record<ComponentName, number>>;
 

@@ -6,12 +6,17 @@
 // liked is relevant. Precision at 10 is compared with ranking the same list
 // by review scores alone (the quality part): the spec's test (section 4).
 //
-// The unseen titles come from taste-neutral sources only: trending, popular,
-// and the household's streaming services. The first version drew them from
-// the whole pool, which is gathered because it resembles the household's
-// favourites; a working recommender ranks those first and was marked down
-// for it (precision 0.02 against 0.27 for scores alone). That test is still
+// The unseen titles are drawn from those that came from a taste-neutral
+// source: trending, popular, or the household's streaming services. Being on
+// another list too (TMDB recommends most popular titles somewhere) does not
+// change how they were picked. The first version drew them from the whole
+// pool, which is gathered because it resembles the household's favourites; a
+// working recommender ranks those first and was marked down for it
+// (precision 0.02 against 0.27 for scores alone). That test is still
 // reported, as is ranking the hidden titles only against each other.
+//
+// As in the app, the parts are turned into percentiles among the titles
+// ranked together before they are blended.
 //
 // The check also searches the balance of the parts (content, collaborative,
 // quality, in steps of 0.05) on the first 10 draws and tests the best on 10
@@ -21,8 +26,8 @@
 import { activeWeights, componentScores, createContext, type Context } from './engine';
 import { buildProfile, explicitRating, referencePoints } from './profile';
 import { sample, seededRandom } from './random';
-import { blend, buildCfIndex, collaborative, QUALITY_PRIOR } from './score';
-import { MODES, type Components, type Mode, type RecInput, type Weights } from './types';
+import { blend, buildCfIndex, QUALITY_PRIOR, toPercentiles } from './score';
+import { isNeutral, MODES, type Components, type Mode, type RecInput, type Weights } from './types';
 
 export const TEST_SHARE = 0.2;
 export const POOL_SAMPLE = 200;
@@ -33,7 +38,6 @@ export const MIN_RATED = 25;
 export const WEIGHT_STEP = 0.05;
 /** Fewer taste-neutral candidates than this, and the main test cannot run. */
 export const MIN_NEUTRAL = 50;
-export const NEUTRAL_SOURCES = new Set(['trending', 'popular', 'services']);
 
 export interface Measure {
   /** Liked titles in the top 10, divided by 10. */
@@ -55,11 +59,14 @@ export interface ListResult {
   measures: Record<Variant, Measure>;
 }
 
+/** Mean raw parts of a group of titles (before percentiles). */
 export interface GroupMeans {
   count: number;
+  /** Cosine with the taste centroid. */
   content: number | null;
-  /** Share with a collaborative part (recommended alongside a liked title). */
+  /** Share on any rated title's TMDB recommendation list. */
   withCollaborative: number;
+  /** Mean signed collaborative sum, among those on a list. */
   collaborative: number | null;
   quality: number | null;
 }
@@ -92,21 +99,30 @@ export interface ModeBacktest {
 interface Scored {
   key: string;
   liked: boolean;
+  /** Raw parts, as componentScores gives them. */
   components: Components;
-  /** The collaborative part alone, with no evidence counted as zero. */
-  collaborativeAlone: number;
+  /** The same parts as percentiles within the list being ranked. */
+  ranked?: Components;
+}
+
+/** Turns each item's parts into percentiles within this list. */
+function rankWithin(list: Scored[]): Scored[] {
+  const copies = list.map((item) => ({ ...item, ranked: { ...item.components } }));
+  const views = copies.map((item) => ({ components: item.ranked }));
+  toPercentiles(views);
+  return copies;
 }
 
 function valueOf(variant: Variant, item: Scored, weights: Weights): number {
   switch (variant) {
     case 'model':
-      return blend(item.components, weights)?.score ?? 0;
+      return blend(item.ranked ?? item.components, weights)?.score ?? 0;
     case 'baseline':
       return item.components.quality ?? QUALITY_PRIOR / 10;
     case 'content':
-      return item.components.content ?? 0.5;
+      return item.components.content ?? -1;
     case 'collaborative':
-      return item.collaborativeAlone;
+      return item.components.collaborative ?? 0;
   }
 }
 
@@ -151,10 +167,10 @@ class Means {
       this.n++;
       for (const part of PARTS) {
         const value = item.components[part];
-        if (value != null) {
-          this.sums[part] += value;
-          this.counts[part]++;
-        }
+        // A collaborative 0 means no rated title lists it: no evidence, not a score.
+        if (value == null || (part === 'collaborative' && value === 0)) continue;
+        this.sums[part] += value;
+        this.counts[part]++;
       }
     }
   }
@@ -178,9 +194,11 @@ class Totals {
   private draws = 0;
   candidates = 0;
 
+  /** list must already be ranked within (rankWithin). */
   add(list: Scored[], weights: Weights): void {
     this.draws++;
-    this.chance += list.filter((item) => item.liked).length / list.length;
+    // A random order puts liked titles in the top 10 at their share of the list.
+    this.chance += (list.filter((item) => item.liked).length / list.length) * (Math.min(TOP_N, list.length) / TOP_N);
     for (const variant of VARIANTS) {
       const result = measure(list.map((item) => ({ key: item.key, liked: item.liked, value: valueOf(variant, item, weights) })));
       this.sums[variant].precision += result.precision;
@@ -201,7 +219,7 @@ class Totals {
         },
       ]),
     ) as Record<Variant, Measure>;
-    return { candidates: this.candidates, chance: Math.min(1, (this.chance / this.draws) * 1), measures };
+    return { candidates: this.candidates, chance: this.chance / this.draws, measures };
   }
 }
 
@@ -211,10 +229,7 @@ export function backtestMode(ctx: Context, mode: Mode, seed: number, draws = DRA
   const rated = input.library.filter((title) => title.key && input.features.has(title.key) && explicitRating(title, mode));
   const libraryKeys = new Set(input.library.map((title) => title.key).filter(Boolean));
   const unrated = [...input.pool.keys()].filter((key) => !libraryKeys.has(key) && input.features.has(key)).sort();
-  const neutral = unrated.filter((key) => {
-    const sources = input.pool.get(key) ?? [];
-    return sources.length > 0 && sources.every((source) => NEUTRAL_SOURCES.has(source));
-  });
+  const neutral = unrated.filter((key) => isNeutral(input.pool.get(key) ?? []));
   const likedPoint = referencePoints(input.library.map((title) => explicitRating(title, mode)?.score).filter((value) => value != null)).liked;
   const testSize = Math.max(1, Math.round(rated.length * TEST_SHARE));
   const result: ModeBacktest = {
@@ -250,13 +265,15 @@ export function backtestMode(ctx: Context, mode: Mode, seed: number, draws = DRA
     const random = seededRandom(seed * 100 + draw);
     const test = sample(rated, testSize, random);
     const profile = buildProfile(input.library, mode, ctx.space, input.now, new Set(test.map((title) => title.key as string)));
-    const cfIndex = buildCfIndex(profile.liked, input.features);
-    const score = (key: string, liked: boolean): Scored => {
-      const scores = componentScores(ctx, profile, cfIndex, input.features.get(key)!, 'missing', 'tmdb');
-      return { key, liked, components: scores.components, collaborativeAlone: collaborative(scores.cf, 'zero') ?? 0 };
-    };
-    const hidden = test.map((title) => score(title.key as string, (explicitRating(title, mode)?.score ?? 0) >= likedPoint));
-    const neutralList = useNeutral ? [...hidden, ...sample(neutral, POOL_SAMPLE, random).map((key) => score(key, false))] : [];
+    const cfIndex = buildCfIndex(profile, input.features, input.now);
+    const score = (key: string, liked: boolean): Scored => ({
+      key,
+      liked,
+      components: componentScores(ctx, profile, cfIndex, input.features.get(key)!, 'tmdb').components,
+    });
+    const hiddenRaw = test.map((title) => score(title.key as string, (explicitRating(title, mode)?.score ?? 0) >= likedPoint));
+    const hidden = rankWithin(hiddenRaw);
+    const neutralList = useNeutral ? rankWithin([...hiddenRaw, ...sample(neutral, POOL_SAMPLE, random).map((key) => score(key, false))]) : [];
 
     // The second ten draws only test the best balance found on the first ten.
     if (draw >= draws) {
@@ -266,18 +283,18 @@ export function backtestMode(ctx: Context, mode: Mode, seed: number, draws = DRA
 
     relevantTotal += hidden.filter((item) => item.liked).length;
     totals.within.add(hidden, weights);
-    means.liked.add(hidden.filter((item) => item.liked));
-    means.other.add(hidden.filter((item) => !item.liked));
+    means.liked.add(hiddenRaw.filter((item) => item.liked));
+    means.other.add(hiddenRaw.filter((item) => !item.liked));
     if (useNeutral) {
       totals.neutral.add(neutralList, weights);
       means.neutral.add(neutralList.slice(hidden.length));
       grid.forEach((balance, index) => {
-        gridTotals[index] += precisionOf(neutralList, (item) => blend(item.components, balance)?.score ?? 0);
+        gridTotals[index] += precisionOf(neutralList, (item) => blend(item.ranked ?? item.components, balance)?.score ?? 0);
       });
     }
     if (unrated.length > 0) {
       const candidates = sample(unrated, POOL_SAMPLE, random).map((key) => score(key, false));
-      totals.pool.add([...hidden, ...candidates], weights);
+      totals.pool.add(rankWithin([...hiddenRaw, ...candidates]), weights);
       means.pool.add(candidates);
     }
   }
@@ -301,7 +318,7 @@ export function backtestMode(ctx: Context, mode: Mode, seed: number, draws = DRA
     if (gap > 1e-9 || (Math.abs(gap) <= 1e-9 && distance(balance) < distance(grid[best]))) best = index;
   });
   const freshPrecision = (value: (item: Scored) => number) => fresh.reduce((sum, list) => sum + precisionOf(list, value), 0) / fresh.length;
-  const freshModel = freshPrecision((item) => blend(item.components, grid[best])?.score ?? 0);
+  const freshModel = freshPrecision((item) => blend(item.ranked ?? item.components, grid[best])?.score ?? 0);
   const freshBaseline = freshPrecision((item) => valueOf('baseline', item, weights));
   result.tuned = { weights: grid[best], train: gridTotals[best] / draws, fresh: freshModel, freshBaseline, freshLift: freshModel - freshBaseline };
   return result;

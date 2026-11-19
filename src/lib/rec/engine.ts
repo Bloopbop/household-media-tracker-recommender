@@ -11,19 +11,17 @@ import {
   availability,
   blend,
   buildCfIndex,
-  collaborative,
   externalScores,
   quality,
-  QUALITY_PRIOR,
+  toPercentiles,
   type CfEntry,
-  type CfMode,
   type ExternalScores,
 } from './score';
 import { MODES, type Components, type Eligibility, type LibraryTitle, type Mode, type RecInput, type SlatePick, type SlateResult, type Weights } from './types';
 import { dot, dotDense, VectorSpace } from './vectors';
 
 /** Changes whenever scoring changes, so saved slates are rebuilt. */
-export const MODEL_VERSION = 'p2.1';
+export const MODEL_VERSION = 'p2.2';
 export const SLATE_SIZE = 20;
 /** Positions (1-based) held for exploratory picks. */
 export const EXPLORATORY_POSITIONS = [5, 10, 15, 20];
@@ -33,7 +31,8 @@ const MMR_TOP = 100;
 const MAX_PER_FRANCHISE = 2;
 const MAX_PER_GENRE = 8;
 const MAX_REWATCH = 2;
-const EXPLORE_MIN_CONTENT = 0.6;
+/** A cold exploratory pick must be in the top quarter of candidates for content. */
+const EXPLORE_MIN_CONTENT = 0.75;
 const COLD_IMDB_VOTES = 1000;
 export const COLD_PROFILE_RATINGS = 30;
 export const TOP_CANDIDATES = 300;
@@ -84,24 +83,25 @@ export interface ComponentScores {
 }
 
 /**
- * The four components for one title. qualityFrom 'tmdb' leaves out the OMDb
- * scores: the backtest uses it, because every library title has OMDb scores
- * and most pool titles do not, which would tilt both rankings toward the
- * library titles.
+ * The raw parts for one title, before they become percentiles: content is
+ * the cosine with the taste centroid, collaborative the signed sum from TMDB
+ * recommendation lists (0 when no rated title lists it), quality 0 to 1.
+ * qualityFrom 'tmdb' leaves out the OMDb scores: the backtest uses it,
+ * because every library title has OMDb scores and most pool titles do not,
+ * which would tilt both rankings toward the library titles.
  */
 export function componentScores(
   ctx: Context,
   profile: Profile,
   cfIndex: Map<string, CfEntry>,
   feature: FeatureRow,
-  cfMode: CfMode = 'missing',
   qualityFrom: 'all' | 'tmdb' = 'all',
 ): ComponentScores {
   const vector = ctx.space.vector(feature.key);
-  const content = vector && profile.norm > 0 ? (1 + dotDense(vector, profile.centroid) / profile.norm) / 2 : undefined;
+  const content = vector && profile.norm > 0 ? dotDense(vector, profile.centroid) / profile.norm : undefined;
   const cf = cfIndex.get(feature.key);
   const external = externalScores(feature, qualityFrom === 'all' ? ctx.input.omdb.get(feature.key) : undefined);
-  return { components: { content, collaborative: collaborative(cf, cfMode), quality: quality(external) }, cf, external };
+  return { components: { content, collaborative: cf?.sum ?? 0, quality: quality(external) }, cf, external };
 }
 
 interface Scored extends ComponentScores {
@@ -167,12 +167,12 @@ class Caps {
 
 function scoreAll(ctx: Context, mode: Mode, profile: Profile): { ranked: Scored[]; cold: Scored[]; cfIndex: Map<string, CfEntry> } {
   const { input } = ctx;
-  const cfIndex = buildCfIndex(profile.liked, input.features);
+  const cfIndex = buildCfIndex(profile, input.features, input.now);
   const weights = activeWeights(input.weights);
   const services = input.services ? new Set(input.services) : null;
-  const ranked: Scored[] = [];
-  const cold: Scored[] = [];
 
+  // First the raw parts of every candidate in this mode, then percentiles among them.
+  const raw: { feature: FeatureRow; title: LibraryTitle | undefined; allowed: Eligibility; scores: ComponentScores; components: Components }[] = [];
   for (const key of new Set([...input.pool.keys(), ...ctx.library.keys()])) {
     const feature = input.features.get(key);
     if (!feature) continue;
@@ -180,26 +180,35 @@ function scoreAll(ctx: Context, mode: Mode, profile: Profile): { ranked: Scored[
     const allowed: Eligibility = title ? eligibility(title, mode) : { type: 'new' };
     if (allowed.type === 'excluded') continue;
     const scores = componentScores(ctx, profile, cfIndex, feature);
-    const mixed = blend(scores.components, weights);
+    raw.push({ feature, title, allowed, scores, components: { ...scores.components } });
+  }
+  toPercentiles(raw);
+
+  const ranked: Scored[] = [];
+  const cold: Scored[] = [];
+  for (const { feature, title, allowed, scores, components } of raw) {
+    const mixed = blend(components, weights);
     if (!mixed) continue;
     const offer = availability(feature.offers, input.region, services);
     const isRewatch = allowed.type === 'rewatch';
-    const omdb = input.omdb.get(key);
+    const omdb = input.omdb.get(feature.key);
     const isCold = !isRewatch && !scores.cf && (!omdb || (omdb.imdbVotes ?? 0) < COLD_IMDB_VOTES);
-    const base = isRewatch
-      ? clamp01((allowed.score - 1) / 9)
-      : isCold
-        ? 0.7 * (scores.components.content ?? 0.5) + 0.3 * (scores.components.quality ?? QUALITY_PRIOR / 10)
-        : mixed.score;
+    const base =
+      allowed.type === 'rewatch'
+        ? clamp01((allowed.score - 1) / 9)
+        : isCold
+          ? 0.7 * (components.content ?? 0.5) + 0.3 * (components.quality ?? 0.5)
+          : mixed.score;
     const item: Scored = {
       ...scores,
+      components,
       feature,
       titleId: title?.id ?? null,
       score: base,
       contributions: mixed.contributions,
       weights: mixed.weights,
       cold: isCold,
-      rewatch: isRewatch ? allowed.seenBy : null,
+      rewatch: allowed.type === 'rewatch' ? allowed.seenBy : null,
       availability: offer,
       final: base * offer.factor,
     };

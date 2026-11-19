@@ -49,13 +49,15 @@
   }
 
   const PARTS: { name: ComponentName; label: string; about: string }[] = [
-    { name: 'content', label: 'Content', about: 'how close it is to what you liked' },
-    { name: 'collaborative', label: 'Collaborative', about: 'whether TMDB recommends it alongside titles you liked' },
+    { name: 'content', label: 'Content', about: 'how close it is to what you rated well' },
+    { name: 'collaborative', label: 'Collaborative', about: 'whether TMDB recommends it beside titles you rated well, more than beside ones you didn’t' },
     { name: 'quality', label: 'Quality', about: 'review and audience scores' },
     { name: 'partner', label: 'Partner', about: "the other person's rating" },
   ];
 
-  const total = $derived(PARTS.reduce((sum, part) => sum + (pick?.evidence.contributions[part.name] ?? 0), 0));
+  /** Each part is a percentile among this list's candidates (0 to 1). */
+  const percent = (value: number) => Math.round(value * 100);
+  const weighted = $derived(!pick?.exploratory && !pick?.rewatch);
   const scoresLine = $derived.by(() => {
     const external = pick?.evidence.external;
     if (!external) return '';
@@ -100,7 +102,8 @@
       <p class="reason">{pick.reason}</p>
       <ul class="parts panel">
         {#each PARTS as part (part.name)}
-          {@const share = pick.evidence.contributions[part.name]}
+          {@const value = pick.components[part.name]}
+          {@const weight = pick.evidence.weights[part.name]}
           <li>
             <div class="part-head">
               <span class="part-name">{part.label}</span>
@@ -108,13 +111,16 @@
             </div>
             {#if part.name === 'partner'}
               <p class="small muted">Off until you each have 30 ratings of your own.</p>
-            {:else if share == null}
+            {:else if value == null}
               <p class="small muted">No data for this title.</p>
             {:else}
               <div class="bar-row">
-                <span class="bar"><span style={`width: ${total > 0 ? Math.round((share / total) * 100) : 0}%`}></span></span>
-                <span class="num">{share.toFixed(2)}</span>
+                <span class="bar"><span style={`width: ${percent(value)}%`}></span></span>
+                <span class="num">{percent(value)}%</span>
               </div>
+              <p class="small muted">
+                Higher than {percent(value)}% of the other candidates{#if weighted && weight != null}; counts for {percent(weight)}% of the score{/if}.
+              </p>
             {/if}
           </li>
         {/each}

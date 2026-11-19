@@ -1,10 +1,11 @@
-// The score components and how they combine (spec, section 3). Every
-// component is scaled 0 to 1; a missing one gives its weight to the others in
-// proportion. Pure, unit tested.
+// The score components and how they combine (spec, section 3). Each part is
+// turned into a percentile among the titles ranked together, so every part
+// runs 0 to 1; a missing one gives its weight to the others in proportion.
+// Pure, unit tested.
 
 import type { OmdbScores } from '../types';
 import type { FeatureRow, Offers } from './features';
-import type { TrainingEntry } from './profile';
+import { signedWeight, type Profile } from './profile';
 import type { ComponentName, Components, Weights } from './types';
 
 export const COMPONENT_NAMES: ComponentName[] = ['content', 'collaborative', 'quality', 'partner'];
@@ -51,40 +52,70 @@ export function quality(scores: ExternalScores): number | undefined {
 // ------------------------------------------------------------ collaborative
 
 export interface CfEntry {
-  /** Sum over liked titles of how high this title sits in their TMDB recommendations (1 at the top). */
+  /**
+   * Over every title the rater has rated: its signed weight (above or below
+   * their mean) times how high this title sits in its TMDB recommendations
+   * (1 at the top). Positive when the titles that list it were loved; near
+   * zero when loved and unloved titles list it alike.
+   */
   sum: number;
+  /** Liked titles that list it, strongest first: for reasons. */
   by: { name: string; strength: number }[];
 }
 
-/** For every title any liked title recommends: how strongly, and by which liked titles. */
-export function buildCfIndex(liked: TrainingEntry[], features: Map<string, FeatureRow>): Map<string, CfEntry> {
+/**
+ * The collaborative part (spec, section 3, changed 18 November 2026): every
+ * rated title's TMDB recommendations count, weighted like the content
+ * centroid. Counting only liked titles' lists rewarded popular titles that
+ * appear on everyone's lists: on the household's ratings that ranked their
+ * favourites below the rest (AUC 0.43 to 0.45).
+ */
+export function buildCfIndex(profile: Profile, features: Map<string, FeatureRow>, now: number): Map<string, CfEntry> {
   const index = new Map<string, CfEntry>();
-  for (const seed of liked) {
-    const recs = features.get(seed.key)?.recs ?? [];
+  for (const entry of profile.entries) {
+    const recs = features.get(entry.key)?.recs ?? [];
+    if (recs.length === 0) continue;
+    const weight = signedWeight(entry, profile.mean, profile.sd, now);
+    const liked = entry.value >= profile.points.liked;
     recs.forEach((key, position) => {
-      const strength = 1 - position / recs.length;
-      const entry = index.get(key) ?? { sum: 0, by: [] };
-      entry.sum += strength;
-      entry.by.push({ name: seed.name, strength });
-      index.set(key, entry);
+      const strength = weight * (1 - position / recs.length);
+      const found = index.get(key) ?? { sum: 0, by: [] };
+      found.sum += strength;
+      if (liked && strength > 0) found.by.push({ name: entry.name, strength });
+      index.set(key, found);
     });
   }
-  for (const entry of index.values()) entry.by.sort((a, b) => b.strength - a.strength);
+  for (const found of index.values()) found.by.sort((a, b) => b.strength - a.strength);
   return index;
 }
 
-/**
- * 'missing': a title no liked title recommends has no collaborative component,
- * and evidence scores 0.5 to 1, so weak evidence never ranks below none.
- * 'zero': no recommendation counts as 0, and evidence scores 0 to 1. The
- * recommendation check compares the two.
- */
-export type CfMode = 'missing' | 'zero';
+// --------------------------------------------------------------- normalizing
 
-export function collaborative(entry: CfEntry | undefined, mode: CfMode = 'missing'): number | undefined {
-  if (!entry || entry.sum <= 0) return mode === 'zero' ? 0 : undefined;
-  const saturated = 1 - Math.exp(-entry.sum);
-  return mode === 'zero' ? saturated : 0.5 + 0.5 * saturated;
+/**
+ * Each part as a percentile among the titles being ranked together, so a
+ * weight means what it says whatever the part's natural spread: raw content
+ * scores barely move, review scores move a lot. Ties share the middle rank.
+ * Titles missing a part stay missing.
+ */
+export function toPercentiles(items: { components: Components }[]): void {
+  for (const name of COMPONENT_NAMES) {
+    const present = items.filter((item) => item.components[name] != null);
+    if (present.length === 0) continue;
+    if (present.length === 1) {
+      present[0].components[name] = 0.5;
+      continue;
+    }
+    const sorted = [...present].sort((a, b) => (a.components[name] as number) - (b.components[name] as number));
+    let start = 0;
+    while (start < sorted.length) {
+      let end = start;
+      const value = sorted[start].components[name];
+      while (end + 1 < sorted.length && sorted[end + 1].components[name] === value) end++;
+      const rank = (start + end) / 2;
+      for (let i = start; i <= end; i++) sorted[i].components[name] = rank / (sorted.length - 1);
+      start = end + 1;
+    }
+  }
 }
 
 // -------------------------------------------------------------------- blend

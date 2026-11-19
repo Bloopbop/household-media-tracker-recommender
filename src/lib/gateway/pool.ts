@@ -14,7 +14,7 @@ import { checkNetwork } from '../network';
 import { keyOf } from '../rec/features';
 import { buildProfile } from '../rec/profile';
 import { loadRecInput, getServices } from '../rec/data';
-import { MODES } from '../rec/types';
+import { isNeutral, MODES } from '../rec/types';
 import { VectorSpace } from '../rec/vectors';
 import { app } from '../state.svelte';
 import { TMDB_SHAPE_VERSION, type Kind, type SearchResult } from '../types';
@@ -26,6 +26,8 @@ export const POOL_MAX = 3000;
 export const POOL_REFRESH_DAYS = 7;
 const LIKED_LISTS = 200;
 const MIN_VOTES = 200;
+/** Pages of popular movies and of popular series (20 titles a page). */
+const POPULAR_PAGES = 5;
 
 /** TMDB's genre ids that exist for movies, and for series (they differ for a few genres). */
 const MOVIE_GENRES = new Set([28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 10770, 53, 10752, 37]);
@@ -157,15 +159,13 @@ export async function buildPool(onProgress: (text: string) => void = () => {}): 
   // from being only look-alikes, and give the recommendation check a fair
   // set of titles to rank the household's favourites against.
   for (const kind of ['movie', 'series'] as Kind[]) {
-    for (const page of [1, 2, 3]) {
+    for (let page = 1; page <= POPULAR_PAGES; page++) {
       const results = await listed(() => discoverTitles(key, kind, { sort_by: 'popularity.desc', 'vote_count.gte': MIN_VOTES, page }));
       addResults(results, 'popular', 6 + (page - 1) * 0.2);
     }
   }
 
-  const chosen = [...found.entries()]
-    .sort((a, b) => a[1].rank - b[1].rank || b[1].sources.size - a[1].sources.size)
-    .slice(0, POOL_MAX);
+  const chosen = capPool(found);
   const now = Date.now();
   await batch([
     { sql: 'DELETE FROM cache.pool' },
@@ -192,8 +192,29 @@ export async function poolBuiltAt(): Promise<number | null> {
   return value ? Number(value) : null;
 }
 
-/** Bump when the pool's sources change, so the next run gathers it again. 2 added popular titles. */
-export const POOL_VERSION = 2;
+/**
+ * Bump when the pool's sources change, so the next run gathers it again.
+ * 2 added popular titles; 3 keeps every taste-neutral title under the cap and
+ * takes five pages of popular titles of each kind.
+ */
+export const POOL_VERSION = 3;
+
+/**
+ * The titles to keep, at most `max`, in rank order. Every title from a
+ * taste-neutral source stays (a few hundred at most), so the recommendation
+ * check always has titles chosen without the household's taste; the rest
+ * fill the remaining places by rank. Pure, unit tested.
+ */
+export function capPool<T extends { sources: Set<string>; rank: number }>(found: Map<string, T>, max = POOL_MAX): [string, T][] {
+  const ordered = [...found.entries()].sort((a, b) => a[1].rank - b[1].rank || b[1].sources.size - a[1].sources.size);
+  const neutral = ordered.filter(([, entry]) => isNeutral([...entry.sources])).slice(0, max);
+  const kept = new Set(neutral.map(([id]) => id));
+  for (const [id] of ordered) {
+    if (kept.size >= max) break;
+    kept.add(id);
+  }
+  return ordered.filter(([id]) => kept.has(id));
+}
 
 export async function poolIsDue(now = Date.now()): Promise<boolean> {
   const built = await poolBuiltAt();

@@ -100,6 +100,16 @@ export function implicitSignal(
   return undefined;
 }
 
+/**
+ * How strongly a rated title pulls the profile toward its features (positive)
+ * or away from them (negative): its rating's distance from the rater's mean,
+ * in standard deviations, times its weight, halved every four years of age.
+ */
+export function signedWeight(entry: TrainingEntry, mean: number, sd: number, now: number): number {
+  const ageYears = Math.max(0, (now - entry.at) / YEAR_MS);
+  return 0.5 ** (ageYears / 4) * entry.weight * ((entry.value - mean) / sd);
+}
+
 export interface Profile {
   mode: Mode;
   points: ReferencePoints;
@@ -152,10 +162,7 @@ export function buildProfile(
   const centroid = new Float64Array(space.dimension);
   for (const entry of entries) {
     const vector = space.vector(entry.key);
-    if (!vector) continue;
-    const ageYears = Math.max(0, (now - entry.at) / YEAR_MS);
-    const decay = 0.5 ** (ageYears / 4);
-    addScaled(centroid, vector, decay * entry.weight * ((entry.value - mean) / sd));
+    if (vector) addScaled(centroid, vector, signedWeight(entry, mean, sd, now));
   }
 
   const liked = entries

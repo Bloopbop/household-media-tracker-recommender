@@ -3,10 +3,10 @@ import { normalizeMovie, normalizeSeries } from '../gateway/tmdb';
 import { backtestMode, measure, MIN_RATED, runBacktest, weightGrid } from './backtest';
 import { buildSlate, buildSlates, createContext, eligibility, EXPLORATORY_POSITIONS } from './engine';
 import { featureRow } from './features';
-import { buildProfile, explicitRating, implicitSignal, referencePoints } from './profile';
+import { buildProfile, explicitRating, implicitSignal, referencePoints, signedWeight } from './profile';
 import { fit, phrase, REASON_MAX } from './reasons';
 import { sample, seededRandom } from './random';
-import { availability, blend, buildCfIndex, collaborative, quality } from './score';
+import { availability, blend, buildCfIndex, quality, toPercentiles } from './score';
 import { featureFor, inputFor, NOW, seenTogether, twoTasteWorld } from './testkit';
 import { START_WEIGHTS, type LibraryTitle } from './types';
 import { dot, VectorSpace } from './vectors';
@@ -159,14 +159,45 @@ describe('components', () => {
     expect(quality({ imdb: null, imdbVotes: null, rt: null, mc: null, tmdb: null, tmdbVotes: 0 })).toBeUndefined();
   });
 
-  it('score the collaborative signal from positions in liked titles’ lists', () => {
-    const features = new Map([['movie:1', featureFor('movie:1', [], { recs: ['movie:5', 'movie:6'] })]]);
-    const index = buildCfIndex([{ key: 'movie:1', titleId: 't', name: 'Liked', value: 9, weight: 1, at: NOW, explicit: true }], features);
-    expect(index.get('movie:5')?.sum).toBe(1);
-    expect(index.get('movie:6')?.sum).toBe(0.5);
-    expect(collaborative(index.get('movie:6'))).toBeGreaterThanOrEqual(0.5);
-    expect(collaborative(undefined)).toBeUndefined();
-    expect(collaborative(undefined, 'zero')).toBe(0);
+  it('score the collaborative signal from every rated title’s list, signed by its rating against the mean', () => {
+    // Mean 7: the loved title lists 5 then 6; the disliked one lists 6 then 7.
+    const rows = [
+      featureFor('movie:1', ['g:1'], { recs: ['movie:5', 'movie:6'] }),
+      featureFor('movie:2', ['g:1'], { recs: ['movie:6', 'movie:7'] }),
+      featureFor('movie:3', ['g:1']),
+    ];
+    const library = [
+      seenTogether('a', 'movie:1', 10, { name: 'Loved' }),
+      seenTogether('b', 'movie:2', 4, { name: 'Disliked' }),
+      seenTogether('c', 'movie:3', 7, { name: 'Middling' }),
+    ];
+    const profile = buildProfile(library, 'US', new VectorSpace(rows), NOW);
+    const index = buildCfIndex(profile, new Map(rows.map((row) => [row.key, row])), NOW);
+    const weight = 3 / Math.sqrt(6);
+    expect(signedWeight(profile.entries[0], profile.mean, profile.sd, NOW)).toBeCloseTo(weight);
+    expect(index.get('movie:5')!.sum).toBeCloseTo(weight);
+    // Listed by both: higher on the disliked title's list, so it leans negative.
+    expect(index.get('movie:6')!.sum).toBeCloseTo(0.5 * weight - weight);
+    expect(index.get('movie:7')!.sum).toBeCloseTo(-0.5 * weight);
+    // Reasons cite only liked titles.
+    expect(index.get('movie:6')!.by.map((item) => item.name)).toEqual(['Loved']);
+    expect(index.get('movie:7')!.by).toEqual([]);
+  });
+
+  it('turn each part into a percentile among the titles ranked together, ties sharing the middle', () => {
+    const items = [
+      { components: { content: 0.1, collaborative: 0, quality: 0.9 } },
+      { components: { content: 0.3, collaborative: 0, quality: 0.5 } },
+      { components: { content: 0.2, collaborative: 2 } },
+      { components: { collaborative: -1, quality: 0.7 } },
+    ];
+    toPercentiles(items);
+    expect(items.map((item) => item.components.content)).toEqual([0, 1, 0.5, undefined]);
+    expect(items.map((item) => item.components.collaborative)).toEqual([0.5, 0.5, 1, 0]);
+    expect(items.map((item) => (item.components as { quality?: number }).quality)).toEqual([1, 0, undefined, 0.5]);
+    const single = [{ components: { content: -0.4 } }];
+    toPercentiles(single);
+    expect(single[0].components.content).toBe(0.5);
   });
 
   it('give a missing component’s weight to the others', () => {
@@ -263,12 +294,13 @@ describe('slates', () => {
   });
 
   it('fill exploratory places from genres the viewer rarely watches, never from ones they rate poorly', () => {
+    // Documentaries: better reviewed than the dramas, not as well as the comedies the viewer rates poorly.
     const world = twoTasteWorld({ omdbForPool: true });
     for (let i = 0; i < 6; i++) {
       const key = `movie:${800 + i}`;
-      world.features.push(featureFor(key, ['d:9', 'g:99', `k:${8000 + i}`], { tmdbVote: 8.6, name: `Documentary ${i}` }));
+      world.features.push(featureFor(key, ['d:9', 'g:99', `k:${8000 + i}`], { tmdbVote: 7.4, name: `Documentary ${i}` }));
       world.pool.push(key);
-      world.omdb.set(key, { imdbRating: 8.4, imdbVotes: 40_000, rottenTomatoes: 97, metacritic: 88 });
+      world.omdb.set(key, { imdbRating: 7.3, imdbVotes: 40_000, rottenTomatoes: null, metacritic: null });
     }
     const slate = buildSlates(inputFor(world.library, world.features, world.pool, { omdb: world.omdb }))[0];
     const exploratory = slate.picks.filter((pick) => pick.exploratory);
@@ -402,6 +434,23 @@ describe('backtest', () => {
     // Look-alikes counted as not relevant mark the recommender down.
     expect(result.pool!.measures.model.precision).toBeLessThan(result.neutral!.measures.model.precision);
     expect(result.groups!.pool.content!).toBeGreaterThan(result.groups!.neutral.content!);
+  });
+
+  it('counts a title from a taste-neutral source even when a taste-based list also has it', () => {
+    const input = ratedWorld();
+    for (const key of [...input.pool.keys()].slice(40, 70)) input.pool.set(key, ['similar', ...input.pool.get(key)!]);
+    const [result] = runBacktest(input, 202611, 2);
+    expect(result.neutralAvailable).toBe(60);
+    expect(result.neutral).not.toBeNull();
+  });
+
+  it('gives a random order its expected precision, even in a list shorter than 10', () => {
+    const input = ratedWorld();
+    input.library = input.library.filter((_, i) => i % 4 === 0);
+    const [result] = runBacktest(input, 202611, 3);
+    expect(result.testSize).toBe(5);
+    // 5 hidden titles, all in the top 10: a random order finds every liked one.
+    expect(result.within!.chance).toBeCloseTo(result.relevant / 10, 5);
   });
 
   it('does not run the main test with too few taste-neutral titles, and says how many there are', () => {
