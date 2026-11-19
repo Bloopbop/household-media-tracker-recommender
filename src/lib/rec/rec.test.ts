@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeMovie, normalizeSeries } from '../gateway/tmdb';
-import { backtestMode, MIN_RATED, runBacktest } from './backtest';
+import { backtestMode, measure, MIN_RATED, runBacktest, weightGrid } from './backtest';
 import { buildSlate, buildSlates, createContext, eligibility, EXPLORATORY_POSITIONS } from './engine';
 import { featureRow } from './features';
 import { buildProfile, explicitRating, implicitSignal, referencePoints } from './profile';
@@ -335,27 +335,94 @@ describe('reasons', () => {
 });
 
 describe('backtest', () => {
-  it('finds the model beating a quality-only baseline when quality points the wrong way', () => {
-    const world = twoTasteWorld();
-    const [result] = runBacktest(inputFor(world.library, world.features, world.pool), 202611, 5);
-    expect(result.mode).toBe('A');
-    expect(result.rated).toBe(52);
-    expect(result.testSize).toBe(10);
-    expect(result.poolSample).toBe(90);
-    expect(result.results!.model.precision).toBeGreaterThan(result.results!.baseline.precision);
+  /**
+   * 100 rated titles: 30 liked sci-fi, 30 neutral dramas, 40 disliked comedies; TMDB scores favour the comedies.
+   * The pool: 40 sci-fi look-alikes (recommended), and 60 popular titles of every kind (taste-neutral).
+   */
+  function ratedWorld() {
+    const features = [];
+    const library = [];
+    for (let i = 0; i < 100; i++) {
+      const [taste, rating, tokens, vote] =
+        i < 30
+          ? ['sci', 10, ['d:1', 'g:878', 'k:10', `k:${1000 + i}`], 6.4]
+          : i < 60
+            ? ['dra', 8, ['d:3', 'g:18', 'k:30', `k:${1000 + i}`], 7.2]
+            : ['com', 6, ['d:2', 'g:35', 'k:20', `k:${1000 + i}`], 7.9];
+      const key = `movie:${100 + i}`;
+      features.push(featureFor(key, tokens as string[], { tmdbVote: vote as number, name: `${taste} ${i}` }));
+      library.push(seenTogether(`t${i}`, key, rating as number, { name: `${taste} ${i}` }));
+    }
+    const input = inputFor(library, [], []);
+    for (let i = 0; i < 40; i++) {
+      const key = `movie:${400 + i}`;
+      features.push(featureFor(key, ['d:1', 'g:878', 'k:10', `k:${4000 + i}`], { tmdbVote: 6.5 }));
+      input.pool.set(key, ['recommended']);
+    }
+    for (let i = 0; i < 60; i++) {
+      const key = `movie:${500 + i}`;
+      const genre = ['g:35', 'g:18', 'g:28'][i % 3];
+      features.push(featureFor(key, [`d:${50 + i}`, genre, `k:${5000 + i}`], { tmdbVote: 7.6 }));
+      input.pool.set(key, i % 2 ? ['popular'] : ['trending', 'services']);
+    }
+    input.features = new Map(features.map((row) => [row.key, row]));
+    return input;
+  }
+
+  it('measures precision at 10 and how often liked titles outrank the rest', () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ key: `k${i}`, liked: i < 4, value: 20 - i }));
+    expect(measure(items)).toEqual({ precision: 0.4, recall: 1, auc: 1 });
+    expect(measure(items.map((item) => ({ ...item, value: -item.value })))).toEqual({ precision: 0, recall: 0, auc: 0 });
+    expect(measure(items.map((item) => ({ ...item, value: 1 }))).auc).toBe(0.5);
+  });
+
+  it('searches 231 balances of the three parts', () => {
+    const grid = weightGrid();
+    expect(grid).toHaveLength(231);
+    expect(grid.every((w) => Math.abs(w.content + w.collaborative + w.quality - 1) < 1e-9 && w.partner === 0)).toBe(true);
+  });
+
+  it('ranks hidden favourites above taste-neutral titles better than review scores do, when the scores point the wrong way', () => {
+    const [result] = runBacktest(ratedWorld(), 202611, 5);
+    expect(result.rated).toBe(100);
+    expect(result.testSize).toBe(20);
+    expect(result.likedPoint).toBe(8.5);
+    expect(result.neutralAvailable).toBe(60);
+    expect(result.neutral!.candidates).toBe(60);
+    expect(result.neutral!.chance).toBeCloseTo(6 / 80, 1);
     expect(result.lift!).toBeGreaterThan(0.05);
+    expect(result.tuned!.weights.quality).toBeLessThan(0.5);
+    expect(result.tuned!.freshLift).toBeGreaterThan(0.05);
+  });
+
+  it('also reports ranking among rated titles, and the first version against the whole pool', () => {
+    const [result] = runBacktest(ratedWorld(), 202611, 5);
+    expect(result.within!.measures.model.auc).toBeGreaterThan(0.9);
+    expect(result.within!.measures.baseline.auc).toBeLessThan(0.5);
+    // Look-alikes counted as not relevant mark the recommender down.
+    expect(result.pool!.measures.model.precision).toBeLessThan(result.neutral!.measures.model.precision);
+    expect(result.groups!.pool.content!).toBeGreaterThan(result.groups!.neutral.content!);
+  });
+
+  it('does not run the main test with too few taste-neutral titles, and says how many there are', () => {
+    const input = ratedWorld();
+    for (const key of [...input.pool.keys()]) if (Number(key.split(':')[1]) >= 520) input.pool.delete(key);
+    const [result] = runBacktest(input, 202611, 3);
+    expect(result.neutralAvailable).toBe(20);
+    expect(result.neutral).toBeNull();
+    expect(result.lift).toBeNull();
+    expect(result.within).not.toBeNull();
   });
 
   it('repeats exactly for the same seed', () => {
-    const world = twoTasteWorld();
-    const input = inputFor(world.library, world.features, world.pool);
+    const input = ratedWorld();
     expect(runBacktest(input, 7, 3)).toEqual(runBacktest(input, 7, 3));
   });
 
   it('declines to report with too few rated titles', () => {
-    const world = twoTasteWorld();
-    const input = inputFor(world.library.slice(0, MIN_RATED - 1), world.features, world.pool);
-    expect(backtestMode(createContext(input), 'A', 1).results).toBeNull();
+    const input = ratedWorld();
+    input.library = input.library.slice(0, MIN_RATED - 1);
+    expect(backtestMode(createContext(input), 'A', 1).within).toBeNull();
   });
 });
 
