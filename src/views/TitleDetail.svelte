@@ -171,6 +171,11 @@
       {#if tmdb?.kind === 'series' && tmdb.seasons}
         <p class="small muted">{tmdb.seasons} season{tmdb.seasons === 1 ? '' : 's'}{tmdb.status ? ` · ${tmdb.status}` : ''}</p>
       {/if}
+      {#if detail.tmdbId != null}
+        <p class="small muted">
+          Wrong version? <a {...nav({ name: 'add', query: detail.name, link: detail.id })}>Change the match</a>
+        </p>
+      {/if}
     </div>
   </header>
 

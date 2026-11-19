@@ -202,14 +202,20 @@
 {:else if results.length > 0}
   <ul class="results">
     {#each results as result (`${result.kind}:${result.tmdbId}`)}
-      {@const existing = inLibrary.has(tmdbCacheKey(result.kind, result.tmdbId))}
+      {@const libraryId = inLibrary.get(tmdbCacheKey(result.kind, result.tmdbId))}
       <li>
         <button type="button" class="result" disabled={busy} onclick={() => pick(result)}>
           <span class="thumb"><Poster path={result.posterPath} name={result.name} size="w92" /></span>
           <span class="text">
             <span class="name">{result.name}</span>
             <span class="muted small">
-              {KIND_LABEL[result.kind]}{result.year ? ` · ${result.year}` : ''}{existing ? ' · in your library' : ''}
+              {KIND_LABEL[result.kind]}{result.year ? ` · ${result.year}` : ''}{result.originCountry.length
+                ? ` · ${result.originCountry.join(', ')}`
+                : ''}{libraryId
+                ? libraryId === link
+                  ? ' · current match'
+                  : ' · in your library'
+                : ''}
             </span>
           </span>
         </button>
