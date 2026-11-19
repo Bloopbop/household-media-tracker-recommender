@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discoverQueries } from '../gateway/pool';
+import { capPool, discoverQueries } from '../gateway/pool';
 import { mergeTop } from './job';
 import type { SlateResult } from './types';
 
@@ -32,6 +32,22 @@ describe('pool discover queries', () => {
     expect(genres.size).toBe(5);
     expect(queries.filter((query) => 'with_keywords' in query.params)).toHaveLength(20);
     expect(queries.filter((query) => 'with_people' in query.params)).toHaveLength(10);
+  });
+});
+
+describe('pool cap', () => {
+  it('keep every title from a taste-neutral source, then the best-ranked of the rest', () => {
+    const found = new Map<string, { sources: Set<string>; rank: number }>([
+      ['movie:1', { sources: new Set(['vault']), rank: 0 }],
+      ['movie:2', { sources: new Set(['recommended']), rank: 1 }],
+      ['movie:3', { sources: new Set(['similar']), rank: 2 }],
+      ['movie:4', { sources: new Set(['similar', 'popular']), rank: 2.5 }],
+      ['movie:5', { sources: new Set(['trending']), rank: 5 }],
+      ['movie:6', { sources: new Set(['popular']), rank: 6 }],
+    ]);
+    expect(capPool(found, 4).map(([id]) => id)).toEqual(['movie:1', 'movie:4', 'movie:5', 'movie:6']);
+    expect(capPool(found, 10).map(([id]) => id)).toEqual(['movie:1', 'movie:2', 'movie:3', 'movie:4', 'movie:5', 'movie:6']);
+    expect(capPool(found, 2).map(([id]) => id)).toEqual(['movie:4', 'movie:5']);
   });
 });
 

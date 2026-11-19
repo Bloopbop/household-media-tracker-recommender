@@ -4,7 +4,7 @@
   import { loadRecInput } from '../lib/rec/data';
   import { buildSlates } from '../lib/rec/engine';
   import { monthSeed } from '../lib/rec/random';
-  import type { Mode, Weights } from '../lib/rec/types';
+  import { isNeutral, type Mode, type Weights } from '../lib/rec/types';
   import { back } from '../lib/router.svelte';
   import { app } from '../lib/state.svelte';
 
@@ -34,7 +34,7 @@
   const signed = (value: number) => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
   const ms = (value: number) => `${Math.round(value).toLocaleString()} ms`;
   const pct = (value: number) => `${Math.round(value * 100)}%`;
-  const opt = (value: number | null) => (value == null ? '–' : fixed(value));
+  const opt = (value: number | null, digits = 2) => (value == null ? '–' : value.toFixed(digits));
   const balance = (weights: Weights) => `content ${fixed(weights.content)}, collaborative ${fixed(weights.collaborative)}, quality ${fixed(weights.quality)}`;
 
   async function run() {
@@ -61,7 +61,7 @@
         seed,
         library: input.library.length,
         candidates: candidates.length,
-        neutral: candidates.filter(([, sources]) => sources.length > 0 && sources.every((source) => ['trending', 'popular', 'services'].includes(source))).length,
+        neutral: candidates.filter(([, sources]) => isNeutral(sources)).length,
         at: new Date(),
       };
     } catch (caught) {
@@ -78,7 +78,7 @@
   const four = (g: Record<'liked' | 'other' | 'neutral' | 'pool', GroupMeans>, pick: (m: GroupMeans) => string) =>
     [g.liked, g.other, g.neutral, g.pool].map(pick).join('/');
   const groupText = (g: Record<'liked' | 'other' | 'neutral' | 'pool', GroupMeans>) =>
-    `content ${four(g, (m) => opt(m.content))}, with collab ${four(g, (m) => pct(m.withCollaborative))}, ` +
+    `content ${four(g, (m) => opt(m.content, 3))}, with collab ${four(g, (m) => pct(m.withCollaborative))}, ` +
     `collab ${four(g, (m) => opt(m.collaborative))}, quality ${four(g, (m) => opt(m.quality))}`;
   const listText = (list: ListResult) =>
     `P@10 model ${fixed(list.measures.model.precision)} scores ${fixed(list.measures.baseline.precision)} chance ${fixed(list.chance)}; ` +
@@ -87,8 +87,8 @@
 
   function resultsText(run: Run): string {
     const lines = [
-      `Recommendation check 2, ${localToday(run.at)}, version ${__APP_VERSION__}`,
-      `Library ${run.library} titles; ${run.candidates} candidates with details (${run.neutral} from trending, popular or services only)`,
+      `Recommendation check 3, ${localToday(run.at)}, version ${__APP_VERSION__}`,
+      `Library ${run.library} titles; ${run.candidates} candidates with details (${run.neutral} from trending, popular or services)`,
       `Seed ${run.seed}, ${DRAWS} draws (+${DRAWS} fresh for the best balance), ${Math.round(TEST_SHARE * 100)}% hidden`,
     ];
     for (const mode of run.modes) {
@@ -134,8 +134,8 @@
 <h1>Recommendation check</h1>
 <p class="lede">
   This hides a random fifth of your ratings and rebuilds the recommender without them. It then mixes the hidden titles with
-  up to 200 you haven't seen, taken from trending, popular and your services' titles, which were chosen without your taste,
-  and counts how many of your hidden favourites come out in the top 10. It compares that with ranking the same list by
+  up to 200 you haven't seen from trending, popular and your services' titles, which are chosen without your taste (some
+  also turn up in lists built from it), and counts how many of your hidden favourites come out in the top 10. It compares that with ranking the same list by
   review scores alone. It repeats this {DRAWS} times and averages, and tries other balances of the parts, testing the best
   on {DRAWS} fresh draws. Nothing leaves this device.
 </p>
