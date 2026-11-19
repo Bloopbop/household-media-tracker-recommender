@@ -1,7 +1,7 @@
 // TMDB adapter: search, details and IMDb-id lookups, trimmed to the fields the
 // app uses. Read-only; the household's data is never sent.
 
-import type { Availability, Kind, Provider, SearchResult, TitleRef, TmdbTitle } from '../types';
+import { TMDB_SHAPE_VERSION, type Availability, type Kind, type Provider, type SearchResult, type TitleRef, type TmdbTitle } from '../types';
 import { Limiter, retryAfterMs } from './limiter';
 
 const API = 'https://api.themoviedb.org/3';
@@ -61,7 +61,6 @@ const yearOf = (date: unknown): number | null => {
   return match ? Number(match[1]) : null;
 };
 const names = (items: Raw[], field = 'name') => items.map((item) => str(item[field])).filter(Boolean);
-const unique = (values: string[]) => [...new Set(values)];
 
 function refs(section: unknown, fallbackKind: Kind): TitleRef[] {
   return list((section as Raw | undefined)?.results)
@@ -94,12 +93,33 @@ function availability(section: unknown, region: string): Availability | null {
   };
 }
 
-function cast(credits: unknown): TmdbTitle['cast'] {
-  return list((credits as Raw | undefined)?.cast)
+/** Named items with their TMDB ids, first occurrence of each id kept, in order. */
+function named(items: Raw[], field = 'name'): { ids: number[]; names: string[] } {
+  const ids: number[] = [];
+  const out: string[] = [];
+  const seen = new Set<number | string>();
+  for (const item of items) {
+    const name = str(item[field]);
+    const id = num(item.id);
+    if (!name) continue;
+    const key = id ?? name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ids.push(id ?? 0);
+    out.push(name);
+  }
+  return { ids, names: out };
+}
+
+function cast(credits: unknown): { cast: TmdbTitle['cast']; ids: number[] } {
+  const people = list((credits as Raw | undefined)?.cast)
     .sort((a, b) => (num(a.order) ?? 999) - (num(b.order) ?? 999))
-    .slice(0, 10)
-    .map((person) => ({ name: str(person.name), character: str(person.character) }))
-    .filter((person) => person.name);
+    .filter((person) => str(person.name))
+    .slice(0, 10);
+  return {
+    cast: people.map((person) => ({ name: str(person.name), character: str(person.character) })),
+    ids: people.map((person) => num(person.id) ?? 0),
+  };
 }
 
 const WRITING_JOBS = new Set(['Screenplay', 'Writer', 'Story', 'Novel', 'Author']);
@@ -107,7 +127,13 @@ const WRITING_JOBS = new Set(['Screenplay', 'Writer', 'Story', 'Novel', 'Author'
 export function normalizeMovie(raw: Raw, region: string): TmdbTitle {
   const crew = list((raw.credits as Raw | undefined)?.crew);
   const externalIds = (raw.external_ids as Raw | undefined) ?? {};
+  const genres = named(list(raw.genres));
+  const keywords = named(list((raw.keywords as Raw | undefined)?.keywords));
+  const directors = named(crew.filter((person) => str(person.job) === 'Director'));
+  const writers = named(crew.filter((person) => WRITING_JOBS.has(str(person.job))));
+  const people = cast(raw.credits);
   return {
+    version: TMDB_SHAPE_VERSION,
     kind: 'movie',
     tmdbId: num(raw.id) ?? 0,
     name: str(raw.title),
@@ -118,15 +144,15 @@ export function normalizeMovie(raw: Raw, region: string): TmdbTitle {
     overview: str(raw.overview),
     posterPath: str(raw.poster_path) || null,
     runtime: num(raw.runtime) || null,
-    genres: names(list(raw.genres)),
+    genres: genres.names,
     voteAverage: num(raw.vote_average),
     voteCount: num(raw.vote_count) ?? 0,
     originalLanguage: str(raw.original_language),
     countries: names(list(raw.production_countries), 'iso_3166_1'),
-    directors: unique(names(crew.filter((person) => str(person.job) === 'Director'))),
-    writers: unique(names(crew.filter((person) => WRITING_JOBS.has(str(person.job))))).slice(0, 5),
-    cast: cast(raw.credits),
-    keywords: names(list((raw.keywords as Raw | undefined)?.keywords)),
+    directors: directors.names,
+    writers: writers.names.slice(0, 5),
+    cast: people.cast,
+    keywords: keywords.names,
     imdbId: str(externalIds.imdb_id) || str(raw.imdb_id) || null,
     status: str(raw.status),
     seasons: null,
@@ -134,6 +160,13 @@ export function normalizeMovie(raw: Raw, region: string): TmdbTitle {
     recommendations: refs(raw.recommendations, 'movie'),
     similar: refs(raw.similar, 'movie'),
     availability: availability(raw['watch/providers'], region),
+    genreIds: genres.ids,
+    keywordIds: keywords.ids,
+    directorIds: directors.ids,
+    writerIds: writers.ids.slice(0, 5),
+    castIds: people.ids,
+    collectionId: num((raw.belongs_to_collection as Raw | null | undefined)?.id),
+    popularity: num(raw.popularity) ?? 0,
   };
 }
 
@@ -143,7 +176,12 @@ export function normalizeSeries(raw: Raw, region: string): TmdbTitle {
   const externalIds = (raw.external_ids as Raw | undefined) ?? {};
   const runtimes = Array.isArray(raw.episode_run_time) ? (raw.episode_run_time as unknown[]).map(num) : [];
   const status = str(raw.status);
+  const genres = named(list(raw.genres));
+  const keywords = named(list((raw.keywords as Raw | undefined)?.results));
+  const creators = named(list(raw.created_by));
+  const people = cast(raw.credits);
   return {
+    version: TMDB_SHAPE_VERSION,
     kind: 'series',
     tmdbId: num(raw.id) ?? 0,
     name: str(raw.name),
@@ -154,15 +192,15 @@ export function normalizeSeries(raw: Raw, region: string): TmdbTitle {
     overview: str(raw.overview),
     posterPath: str(raw.poster_path) || null,
     runtime: runtimes.find((value): value is number => value != null && value > 0) ?? null,
-    genres: names(list(raw.genres)),
+    genres: genres.names,
     voteAverage: num(raw.vote_average),
     voteCount: num(raw.vote_count) ?? 0,
     originalLanguage: str(raw.original_language),
     countries: Array.isArray(raw.origin_country) ? (raw.origin_country as unknown[]).map(str).filter(Boolean) : [],
-    directors: unique(names(list(raw.created_by))),
+    directors: creators.names,
     writers: [],
-    cast: cast(raw.credits),
-    keywords: names(list((raw.keywords as Raw | undefined)?.results)),
+    cast: people.cast,
+    keywords: keywords.names,
     imdbId: str(externalIds.imdb_id) || null,
     status,
     seasons: num(raw.number_of_seasons),
@@ -170,6 +208,13 @@ export function normalizeSeries(raw: Raw, region: string): TmdbTitle {
     recommendations: refs(raw.recommendations, 'series'),
     similar: refs(raw.similar, 'series'),
     availability: availability(raw['watch/providers'], region),
+    genreIds: genres.ids,
+    keywordIds: keywords.ids,
+    directorIds: creators.ids,
+    writerIds: [],
+    castIds: people.ids,
+    collectionId: null,
+    popularity: num(raw.popularity) ?? 0,
   };
 }
 
@@ -220,6 +265,54 @@ export async function fetchDetails(key: string, kind: Kind, tmdbId: number, regi
     append_to_response: DETAIL_SECTIONS.join(','),
   });
   return kind === 'movie' ? normalizeMovie(raw, region) : normalizeSeries(raw, region);
+}
+
+const isResult = (result: SearchResult | null): result is SearchResult => result !== null;
+
+/** /discover for one kind; params are TMDB's own (with_genres, sort_by, …). */
+export async function discoverTitles(
+  key: string,
+  kind: Kind,
+  params: Record<string, string | number | undefined>,
+): Promise<SearchResult[]> {
+  const data = await tmdbGet<{ results?: Raw[] }>(key, `/discover/${kind === 'movie' ? 'movie' : 'tv'}`, {
+    include_adult: 'false',
+    ...params,
+  });
+  return list(data.results)
+    .map((item) => normalizeSearchResult(item, kind))
+    .filter(isResult);
+}
+
+/** This week's trending movies and series. */
+export async function trendingTitles(key: string, page = 1): Promise<SearchResult[]> {
+  const data = await tmdbGet<{ results?: Raw[] }>(key, '/trending/all/week', { page });
+  return list(data.results)
+    .map((item) => normalizeSearchResult(item))
+    .filter(isResult);
+}
+
+export interface RegionProvider extends Provider {
+  /** TMDB's display order in the region; lower is more prominent. */
+  priority: number;
+}
+
+/** Streaming and rental services TMDB lists for a region, movies and series together. */
+export async function watchProviderList(key: string, region: string): Promise<RegionProvider[]> {
+  const found = new Map<number, RegionProvider>();
+  for (const kind of ['movie', 'tv']) {
+    const data = await tmdbGet<{ results?: Raw[] }>(key, `/watch/providers/${kind}`, { watch_region: region });
+    for (const item of list(data.results)) {
+      const id = num(item.provider_id);
+      const name = str(item.provider_name);
+      if (!id || !name) continue;
+      const priorities = item.display_priorities as Raw | undefined;
+      const priority = num(priorities?.[region]) ?? num(item.display_priority) ?? 999;
+      const existing = found.get(id);
+      if (!existing || priority < existing.priority) found.set(id, { id, name, logoPath: str(item.logo_path) || null, priority });
+    }
+  }
+  return [...found.values()].sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
 }
 
 /** Finds a title's TMDB entry from its IMDb id. */

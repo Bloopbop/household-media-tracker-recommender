@@ -3,6 +3,7 @@
   import { exec, openDb } from './lib/db';
   import { isStandalone } from './lib/checks';
   import { refreshIfDue } from './lib/gateway/refresh';
+  import { runRecJob } from './lib/rec/job';
   import { checkNetwork } from './lib/network';
   import { loadProfiles } from './lib/repo';
   import { nav, router } from './lib/router.svelte';
@@ -13,14 +14,16 @@
   import ImportVault from './views/ImportVault.svelte';
   import DeviceCheck from './views/DeviceCheck.svelte';
   import Library from './views/Library.svelte';
+  import Pick from './views/Pick.svelte';
+  import RecCheck from './views/RecCheck.svelte';
   import Recommend from './views/Recommend.svelte';
   import Settings from './views/Settings.svelte';
   import TitleDetail from './views/TitleDetail.svelte';
 
   const tab = $derived.by(() => {
     const name = router.route.name;
-    if (name === 'recommend') return 'recommend';
-    if (name === 'settings' || name === 'device-check' || name === 'about' || name === 'import') return 'settings';
+    if (name === 'recommend' || name === 'pick') return 'recommend';
+    if (name === 'settings' || name === 'device-check' || name === 'about' || name === 'import' || name === 'rec-check') return 'settings';
     return 'library';
   });
 
@@ -44,11 +47,17 @@
       app.error = error instanceof Error ? error.message : String(error);
       return;
     }
-    void refreshIfDue((text) => (app.refreshStatus = text)).catch(() => (app.refreshStatus = ''));
+    // The daily refresh first, so the recommender works from fresh library records.
+    void refreshIfDue((text) => (app.refreshStatus = text))
+      .catch(() => (app.refreshStatus = ''))
+      .finally(() => void runRecJob());
   }
 
   onMount(() => {
-    const update = async () => (app.online = await checkNetwork());
+    const update = async () => {
+      app.online = await checkNetwork();
+      if (app.online && app.ready) void runRecJob();
+    };
     addEventListener('online', update);
     addEventListener('offline', update);
     void start();
@@ -87,6 +96,12 @@
       <ImportVault />
     {:else if router.route.name === 'agree'}
       <AgreeAdjust person={router.route.person} />
+    {:else if router.route.name === 'pick'}
+      {#key `${router.route.key}|${router.route.mode}`}
+        <Pick key={router.route.key} mode={router.route.mode} />
+      {/key}
+    {:else if router.route.name === 'rec-check'}
+      <RecCheck />
     {/if}
   </div>
 

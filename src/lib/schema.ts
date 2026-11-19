@@ -138,6 +138,56 @@ export const HOUSEHOLD_MIGRATIONS: string[] = [
     skipped_at INTEGER NOT NULL
   );
   `,
+
+  // 4. Phase 2 recommendations. A slate is one saved list of picks for a mode
+  // (A, B, or US for Together). Slates are rebuilt from the data, are left out
+  // of backups, and are deleted after 120 days, inside TMDB's six-month limit.
+  `
+  CREATE TABLE slate (
+    id            TEXT PRIMARY KEY,
+    mode          TEXT NOT NULL CHECK (mode IN ('A', 'B', 'US')),
+    model_version TEXT NOT NULL,
+    weights       TEXT NOT NULL,
+    built_from    TEXT NOT NULL,
+    stats         TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+  CREATE INDEX slate_mode ON slate (mode, created_at);
+
+  CREATE TABLE slate_item (
+    slate_id      TEXT NOT NULL REFERENCES slate (id) ON DELETE CASCADE,
+    rank          INTEGER NOT NULL,
+    title_key     TEXT NOT NULL,
+    title_id      TEXT,
+    score         REAL NOT NULL,
+    content       REAL,
+    collaborative REAL,
+    quality       REAL,
+    partner       REAL,
+    availability  REAL NOT NULL,
+    exploratory   INTEGER NOT NULL DEFAULT 0 CHECK (exploratory IN (0, 1)),
+    rewatch       INTEGER NOT NULL DEFAULT 0 CHECK (rewatch IN (0, 1)),
+    reserve       INTEGER NOT NULL DEFAULT 0 CHECK (reserve IN (0, 1)),
+    reason        TEXT NOT NULL,
+    evidence      TEXT NOT NULL,
+    PRIMARY KEY (slate_id, rank)
+  );
+  CREATE INDEX slate_item_key ON slate_item (title_key);
+
+  CREATE TABLE signal (
+    id        TEXT PRIMARY KEY,
+    at        INTEGER NOT NULL,
+    mode      TEXT NOT NULL CHECK (mode IN ('A', 'B', 'US')),
+    type      TEXT NOT NULL,
+    title_key TEXT,
+    title_id  TEXT,
+    slate_id  TEXT,
+    rank      INTEGER,
+    session   TEXT
+  );
+  CREATE INDEX signal_at ON signal (at);
+  CREATE INDEX signal_key ON signal (title_key, type);
+  `,
 ];
 
 export const CACHE_MIGRATIONS: string[] = [
@@ -175,6 +225,42 @@ export const CACHE_MIGRATIONS: string[] = [
     fetched_at INTEGER NOT NULL
   );
   `,
+
+  // 3. Phase 2. title_feature: what the recommender needs from each cached
+  // TMDB record, kept small so scoring never parses the full records. pool:
+  // candidate titles and where they came from. provider: the region's
+  // services. omdb_wanted: the best-scoring candidates, which get review
+  // scores from OMDb within the daily allowance.
+  `
+  CREATE TABLE cache.title_feature (
+    key        TEXT PRIMARY KEY,
+    version    INTEGER NOT NULL,
+    data       TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
+  );
+  CREATE TABLE cache.pool (
+    key       TEXT PRIMARY KEY,
+    kind      TEXT NOT NULL,
+    tmdb_id   INTEGER NOT NULL,
+    sources   TEXT NOT NULL,
+    rank      REAL NOT NULL,
+    listed_at INTEGER NOT NULL
+  );
+  CREATE TABLE cache.provider (
+    region     TEXT NOT NULL,
+    id         INTEGER NOT NULL,
+    name       TEXT NOT NULL,
+    logo_path  TEXT,
+    priority   INTEGER NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (region, id)
+  );
+  CREATE TABLE cache.omdb_wanted (
+    key     TEXT PRIMARY KEY,
+    imdb_id TEXT NOT NULL,
+    rank    INTEGER NOT NULL
+  );
+  `,
 ];
 
 /**
@@ -183,4 +269,4 @@ export const CACHE_MIGRATIONS: string[] = [
  * a backup file never carries them.
  */
 export const DEVICE_ONLY_SETTINGS_SQL =
-  "key IN ('tmdb_key', 'omdb_key', 'offline_seen', 'poster_offline_seen', 'poster_url') OR key LIKE 'result\\_%' ESCAPE '\\'";
+  "key IN ('tmdb_key', 'omdb_key', 'offline_seen', 'poster_offline_seen', 'poster_url', 'rec_mode') OR key LIKE 'result\\_%' ESCAPE '\\'";

@@ -81,10 +81,18 @@ export interface TitleRef {
 }
 
 /**
+ * Version of the TmdbTitle shape. Rows saved under an older shape are treated
+ * as stale and fetched again. 2 added the ids the recommender needs.
+ */
+export const TMDB_SHAPE_VERSION = 2;
+
+/**
  * The subset of a TMDB record the app keeps. TMDB data may be cached for at
  * most six months, so this lives only in cache.db.
  */
 export interface TmdbTitle {
+  /** Absent on rows saved before version 2. */
+  version?: number;
   kind: Kind;
   tmdbId: number;
   name: string;
@@ -111,6 +119,15 @@ export interface TmdbTitle {
   recommendations: TitleRef[];
   similar: TitleRef[];
   availability: Availability | null;
+  // Version 2: ids aligned with the name lists above, for the recommender.
+  genreIds?: number[];
+  keywordIds?: number[];
+  directorIds?: number[];
+  writerIds?: number[];
+  castIds?: number[];
+  /** Movies: the franchise (TMDB collection) it belongs to. */
+  collectionId?: number | null;
+  popularity?: number;
 }
 
 export interface OmdbScores {

@@ -152,6 +152,9 @@ async function exportHousehold(): Promise<Uint8Array> {
     copy.exec('PRAGMA secure_delete = ON');
     copy.exec(`DELETE FROM settings WHERE ${DEVICE_ONLY_SETTINGS_SQL}`);
     copy.exec('DELETE FROM spike_boot');
+    // Slates are rebuilt from the data and hold TMDB-derived text.
+    copy.exec('DELETE FROM slate_item');
+    copy.exec('DELETE FROM slate');
     copy.exec('VACUUM');
   } finally {
     copy.close();
@@ -217,10 +220,15 @@ async function importHousehold(bytes: Uint8Array): Promise<{ titles: number }> {
   return { titles };
 }
 
+/** Deletes everything fetched from outside, and the slates built from it. */
 function clearCache(): void {
-  batch(
-    ['tmdb_title', 'omdb_rating', 'fetch_failure', 'gateway_state'].map((table) => ({ sql: `DELETE FROM cache.${table}` })),
-  );
+  batch([
+    ...['tmdb_title', 'omdb_rating', 'fetch_failure', 'gateway_state', 'title_feature', 'pool', 'provider', 'omdb_wanted'].map(
+      (table) => ({ sql: `DELETE FROM cache.${table}` }),
+    ),
+    { sql: 'DELETE FROM slate_item' },
+    { sql: 'DELETE FROM slate' },
+  ]);
 }
 
 async function handle(request: DbRequest): Promise<DbResponse> {
