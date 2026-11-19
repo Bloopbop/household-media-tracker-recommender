@@ -2,7 +2,7 @@
 
 import type { Kind, OmdbScores } from '../types';
 import type { FeatureRow } from './features';
-import { START_WEIGHTS, type LibraryTitle, type RecInput } from './types';
+import { noFeedback, START_WEIGHTS, type LibraryTitle, type RecInput } from './types';
 
 export const NOW = Date.UTC(2026, 10, 18);
 
@@ -57,6 +57,7 @@ export function inputFor(library: LibraryTitle[], features: FeatureRow[], pool: 
     services: null,
     names: { A: 'Sam', B: 'Alex' },
     weights: START_WEIGHTS,
+    feedback: noFeedback(),
     ...extra,
   };
 }

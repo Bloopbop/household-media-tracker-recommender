@@ -10,7 +10,7 @@ import { fetchWantedOmdb } from '../gateway/refresh';
 import { app } from '../state.svelte';
 import { loadRecInput } from './data';
 import { buildSlates, TOP_CANDIDATES } from './engine';
-import { dataFingerprint, latestFingerprint, saveOmdbWanted, saveSlates } from './store';
+import { dataFingerprint, latestFingerprint, saveOmdbWanted, saveSlates, slatesBuiltToday } from './store';
 import type { SlateResult } from './types';
 
 /** Merges each mode's best candidates in turn, so all three get review scores. */
@@ -28,7 +28,9 @@ export function mergeTop(results: SlateResult[], count = TOP_CANDIDATES): string
 
 async function rebuild(force: boolean): Promise<boolean> {
   const fingerprint = await dataFingerprint(app.region);
-  if (!force && fingerprint === (await latestFingerprint())) return false;
+  // Rebuilt when the data changed, and once a day: the new day's slate takes
+  // in yesterday's reactions and gets a new mix of the two rankings.
+  if (!force && fingerprint === (await latestFingerprint()) && (await slatesBuiltToday())) return false;
   const started = performance.now();
   const input = await loadRecInput();
   if (input.features.size === 0) return false;

@@ -5,6 +5,7 @@ import { batch, exec, getSetting, setSetting } from '../db';
 import { app } from '../state.svelte';
 import type { Kind, OmdbScores, ProfileId, Rater, Status, TmdbTitle } from '../types';
 import { FEATURE_VERSION, featureRow, type FeatureRow } from './features';
+import { feedbackFrom, type SignalRow } from './feedback';
 import { START_WEIGHTS, type LibraryTitle, type RecInput } from './types';
 
 const parse = <T>(text: unknown, fallback: T): T => {
@@ -78,8 +79,13 @@ interface LibraryRow {
   events: string | null;
 }
 
-export async function loadLibrary(): Promise<LibraryTitle[]> {
-  const rows = await exec<LibraryRow>(`
+/** The library, or only the titles with these keys (kind:tmdbId). */
+export async function loadLibrary(keys?: string[]): Promise<LibraryTitle[]> {
+  const only = keys
+    ? `WHERE t.tmdb_id IS NOT NULL AND t.kind || ':' || t.tmdb_id IN (SELECT value FROM json_each(?))`
+    : '';
+  const rows = await exec<LibraryRow>(
+    `
     SELECT t.id, t.kind, t.name, t.tmdb_id,
            (SELECT json_group_object(r.rater, json_object('score', r.score, 'at', r.rated_at))
               FROM rating r WHERE r.title_id = t.id) AS ratings,
@@ -88,7 +94,9 @@ export async function loadLibrary(): Promise<LibraryTitle[]> {
            (SELECT json_group_array(json_object('participants', w.participants, 'completion', w.completion,
                                                 'rewatch', w.is_rewatch, 'at', w.created_at))
               FROM watch_event w WHERE w.title_id = t.id) AS events
-      FROM title t`);
+      FROM title t ${only}`,
+    keys ? [JSON.stringify(keys)] : [],
+  );
   return rows.map((row) => {
     const states = parse<Partial<Record<ProfileId, { status: Status | null; rewatch: number; at: number }>>>(row.states, {});
     const events = parse<{ participants: number; completion: number; rewatch: number; at: number }[]>(row.events, []);
@@ -106,9 +114,18 @@ export async function loadLibrary(): Promise<LibraryTitle[]> {
   });
 }
 
+/** Signals the next slates depend on: every reaction, and impressions recent enough for a fatigue rest. */
+export async function loadSignals(now = Date.now()): Promise<SignalRow[]> {
+  return exec<SignalRow>(
+    `SELECT mode, type, title_key AS key, at FROM signal
+      WHERE title_key IS NOT NULL AND (type <> 'impression' OR at >= ?)`,
+    [now - 60 * 86_400_000],
+  );
+}
+
 export async function loadRecInput(now = Date.now()): Promise<RecInput> {
   await ensureFeatures();
-  const [library, featureRows, omdbRows, poolRows, services] = await Promise.all([
+  const [library, featureRows, omdbRows, poolRows, services, signals] = await Promise.all([
     loadLibrary(),
     exec<{ data: string }>('SELECT data FROM cache.title_feature WHERE version = ?', [FEATURE_VERSION]),
     exec<{ key: string; data: string }>(
@@ -117,6 +134,7 @@ export async function loadRecInput(now = Date.now()): Promise<RecInput> {
     ),
     exec<{ key: string; sources: string }>('SELECT key, sources FROM cache.pool'),
     getServices(app.region),
+    loadSignals(now),
   ]);
   const features = new Map<string, FeatureRow>();
   for (const row of featureRows) {
@@ -138,5 +156,6 @@ export async function loadRecInput(now = Date.now()): Promise<RecInput> {
     services,
     names: { ...app.profiles },
     weights: START_WEIGHTS,
+    feedback: feedbackFrom(signals, now),
   };
 }

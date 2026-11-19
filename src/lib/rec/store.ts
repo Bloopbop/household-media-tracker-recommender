@@ -2,9 +2,13 @@
 // came from changes.
 
 import { batch, exec, getSetting, setSetting } from '../db';
-import type { Kind } from '../types';
-import { MODEL_VERSION } from './engine';
-import { MODES, START_WEIGHTS, type Components, type Evidence, type Mode, type SlatePick, type SlateResult } from './types';
+import type { Kind, ProfileId } from '../types';
+import { loadLibrary } from './data';
+import { eligibility, EXPLORATORY_POSITIONS, MODEL_VERSION, SLATE_SIZE } from './engine';
+import { NOT_TONIGHT_DAYS } from './feedback';
+import { arrange } from './interleave';
+import { peopleIn } from './profile';
+import { MODES, START_WEIGHTS, type Arm, type Components, type Evidence, type Mode, type SlatePick, type SlateResult } from './types';
 
 /** Changes whenever anything a slate depends on changes. */
 export async function dataFingerprint(region: string): Promise<string> {
@@ -30,13 +34,23 @@ export interface SlateStats {
   buildMs: number;
 }
 
+/** A pick as saved: where it sits in which slate. */
+export interface StoredPick extends SlatePick {
+  slateId: string;
+  /** Its place in the saved slate (visible picks first, then reserves). */
+  rank: number;
+  /** People in the mode who have it on their Want to watch list now (watchlists are candidates too). */
+  listedBy: ProfileId[];
+}
+
 export interface StoredSlate {
   id: string;
   mode: Mode;
   createdAt: number;
   stats: SlateStats;
-  picks: SlatePick[];
-  reserve: SlatePick[];
+  /** What to show now: picks that left (reactions, changes in the library) replaced from the reserve. */
+  picks: StoredPick[];
+  reserve: StoredPick[];
 }
 
 interface Display {
@@ -64,8 +78,8 @@ export async function saveSlates(results: SlateResult[], fingerprint: string, bu
       },
       ...items.map(({ pick, reserve }, index) => ({
         sql: `INSERT INTO slate_item (slate_id, rank, title_key, title_id, score, content, collaborative, quality, partner,
-                                      availability, exploratory, rewatch, reserve, reason, evidence)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                      availability, exploratory, rewatch, reserve, reason, evidence, arm)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         bind: [
           id,
           index + 1,
@@ -82,6 +96,7 @@ export async function saveSlates(results: SlateResult[], fingerprint: string, bu
           reserve ? 1 : 0,
           pick.reason,
           JSON.stringify({ ...pick.evidence, display: { kind: pick.kind, name: pick.name, year: pick.year, posterPath: pick.posterPath } }),
+          pick.arm,
         ],
       })),
     ];
@@ -114,6 +129,7 @@ export async function saveOmdbWanted(keys: string[]): Promise<void> {
 }
 
 interface ItemRow {
+  arm: Arm | null;
   slate_id: string;
   rank: number;
   title_key: string;
@@ -131,13 +147,17 @@ interface ItemRow {
   evidence: string;
 }
 
-function toPick(row: ItemRow): SlatePick {
+function toPick(row: ItemRow): StoredPick {
   const evidence = JSON.parse(row.evidence) as Evidence & { display: Display };
   const components: Components = {};
   for (const name of ['content', 'collaborative', 'quality', 'partner'] as const) {
     if (row[name] != null) components[name] = row[name] as number;
   }
   return {
+    slateId: row.slate_id,
+    rank: row.rank,
+    listedBy: [],
+    arm: row.arm ?? (row.exploratory ? 'explore' : 'model'),
     key: row.title_key,
     titleId: row.title_id,
     kind: evidence.display.kind,
@@ -154,6 +174,38 @@ function toPick(row: ItemRow): SlatePick {
   };
 }
 
+/**
+ * Keys to leave out of a mode's slate now, though it was built with them:
+ * anything reacted to in this slate, Not tonight in the last 14 days,
+ * Together's Not interested, and titles the library now rules out (watched,
+ * on the list, not interested, dropped, in progress).
+ */
+async function hiddenNow(
+  mode: Mode,
+  slateId: string,
+  keys: string[],
+  now = Date.now(),
+): Promise<{ hidden: Set<string>; listed: Map<string, ProfileId[]> }> {
+  const [reacted, library] = await Promise.all([
+    exec<{ key: string }>(
+      `SELECT DISTINCT title_key AS key FROM signal
+        WHERE mode = ? AND title_key IS NOT NULL AND type IN ('watchlist', 'seen', 'not_tonight', 'not_interested')
+          AND (slate_id = ? OR (type = 'not_tonight' AND at >= ?) OR (type = 'not_interested' AND mode = 'US'))`,
+      [mode, slateId, now - NOT_TONIGHT_DAYS * 86_400_000],
+    ),
+    loadLibrary(keys),
+  ]);
+  const hidden = new Set(reacted.map((row) => row.key));
+  const listed = new Map<string, ProfileId[]>();
+  for (const title of library) {
+    if (!title.key) continue;
+    if (eligibility(title, mode).type === 'excluded') hidden.add(title.key);
+    const people = peopleIn(mode).filter((person) => title.states[person]?.status === 'watchlist');
+    if (people.length) listed.set(title.key, people);
+  }
+  return { hidden, listed };
+}
+
 export async function loadSlate(mode: Mode): Promise<StoredSlate | null> {
   const [slate] = await exec<{ id: string; mode: Mode; created_at: number; stats: string }>(
     'SELECT id, mode, created_at, stats FROM slate WHERE mode = ? ORDER BY created_at DESC LIMIT 1',
@@ -161,25 +213,51 @@ export async function loadSlate(mode: Mode): Promise<StoredSlate | null> {
   );
   if (!slate) return null;
   const rows = await exec<ItemRow>('SELECT * FROM slate_item WHERE slate_id = ? ORDER BY rank', [slate.id]);
-  const picks = rows.map((row) => ({ row, pick: toPick(row) }));
+  const items = rows.map(toPick);
+  const { hidden, listed } = await hiddenNow(mode, slate.id, items.map((item) => item.key));
+  for (const item of items) item.listedBy = listed.get(item.key) ?? [];
+  const picks = arrange(items, hidden, SLATE_SIZE, EXPLORATORY_POSITIONS);
+  const shown = new Set(picks.map((pick) => pick.key));
   return {
     id: slate.id,
     mode: slate.mode,
     createdAt: slate.created_at,
     stats: JSON.parse(slate.stats) as SlateStats,
-    picks: picks.filter((entry) => !entry.row.reserve).map((entry) => entry.pick),
-    reserve: picks.filter((entry) => entry.row.reserve).map((entry) => entry.pick),
+    picks,
+    reserve: items.filter((item) => !shown.has(item.key) && !hidden.has(item.key)),
   };
 }
 
 /** The latest saved pick for a title in a mode, for Why this? */
-export async function loadPick(mode: Mode, key: string): Promise<SlatePick | null> {
+export async function loadPick(mode: Mode, key: string): Promise<StoredPick | null> {
   const [row] = await exec<ItemRow>(
     `SELECT i.* FROM slate_item i JOIN slate s ON s.id = i.slate_id
       WHERE s.mode = ? AND i.title_key = ? ORDER BY s.created_at DESC LIMIT 1`,
     [mode, key],
   );
-  return row ? toPick(row) : null;
+  if (!row) return null;
+  const pick = toPick(row);
+  const [title] = await loadLibrary([key]);
+  pick.listedBy = title ? peopleIn(mode).filter((person) => title.states[person]?.status === 'watchlist') : [];
+  return pick;
+}
+
+/** Whether every mode's latest slate was built today (local time): picks change at most daily unless the data does. */
+export async function slatesBuiltToday(now = Date.now()): Promise<boolean> {
+  const rows = await exec<{ day: string }>(
+    `SELECT date(MAX(created_at) / 1000, 'unixepoch', 'localtime') AS day FROM slate GROUP BY mode`,
+  );
+  const [today] = await exec<{ day: string }>(`SELECT date(? / 1000, 'unixepoch', 'localtime') AS day`, [now]);
+  return rows.length === MODES.length && rows.every((row) => row.day === today.day);
+}
+
+/**
+ * After a reaction, marks the current slates as built from the data as it now
+ * is: the reaction already took the pick off the slate, so it should not
+ * reshuffle the whole list. Tomorrow's slates take it into account.
+ */
+export async function absorbChange(before: string, after: string): Promise<void> {
+  if (before !== after) await exec('UPDATE slate SET built_from = ? WHERE built_from = ?', [after, before]);
 }
 
 export async function latestFingerprint(): Promise<string | null> {

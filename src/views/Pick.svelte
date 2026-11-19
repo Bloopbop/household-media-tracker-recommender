@@ -1,11 +1,13 @@
 <script lang="ts">
   import Poster from '../components/Poster.svelte';
+  import RatingPicker from '../components/RatingPicker.svelte';
   import { DAY_MS } from '../lib/gateway/policy';
   import { logoUrl } from '../lib/gateway/tmdb';
   import { yearSpan } from '../lib/library';
   import { formatRating } from '../lib/ratings';
-  import { loadCandidate, loadPick, type CandidateDetail } from '../lib/rec/store';
-  import type { ComponentName, Mode, SlatePick } from '../lib/rec/types';
+  import { logOpen, react, REACTION_LABEL, reactionsFor, type Done, type Reaction } from '../lib/rec/reactions';
+  import { loadCandidate, loadPick, type CandidateDetail, type StoredPick } from '../lib/rec/store';
+  import type { ComponentName, Mode } from '../lib/rec/types';
   import { back, nav } from '../lib/router.svelte';
   import { app } from '../lib/state.svelte';
   import { KIND_LABEL, type Provider } from '../lib/types';
@@ -13,15 +15,45 @@
   let { key, mode }: { key: string; mode: Mode } = $props();
 
   let detail = $state<CandidateDetail | null>(null);
-  let pick = $state<SlatePick | null>(null);
+  let pick = $state<StoredPick | null>(null);
+  /** Seen it's rating, while it is being asked for. */
+  let rating = $state<{ value: number | null } | null>(null);
+  let busy = $state(false);
+  let failure = $state('');
+  let done = $state<Done | null>(null);
 
   $effect(() => {
     void app.slatesVersion;
     void Promise.all([loadCandidate(key), loadPick(mode, key)]).then(([candidate, saved]) => {
       detail = candidate;
       pick = saved;
+      if (saved) logOpen({ mode, pick: saved, position: saved.rank });
     });
   });
+
+  async function respond(reaction: Reaction) {
+    if (!pick || busy) return;
+    if (reaction === 'seen' && !rating) {
+      rating = { value: null };
+      return;
+    }
+    busy = true;
+    failure = '';
+    try {
+      done = await react({ mode, pick, position: pick.rank }, reaction, reaction === 'seen' ? (rating?.value ?? null) : null);
+      rating = null;
+    } catch (error) {
+      failure = `That didn't save: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function undo() {
+    const last = done;
+    done = null;
+    if (last) await last.undo();
+  }
 
   const tmdb = $derived(detail?.tmdb ?? null);
   const name = $derived(tmdb?.name ?? pick?.name ?? '');
@@ -95,6 +127,32 @@
       {/if}
     </div>
   </header>
+
+  {#if pick}
+    <section class="react-panel" aria-label="Your reaction">
+      {#if done}
+        <p class="small" role="status">
+          {done.message}. <button type="button" class="link" onclick={undo}>Undo</button>
+          <a {...nav({ name: 'recommend' })}>Back to For you</a>
+        </p>
+      {:else if rating}
+        <RatingPicker bind:value={rating.value} label={mode === 'US' ? 'Your agreed rating' : `${app.profiles[mode]}'s rating`} />
+        <div class="seen-actions">
+          <button type="button" disabled={busy} onclick={() => respond('seen')}>
+            {rating.value == null ? 'Save without a rating' : 'Save'}
+          </button>
+          <button type="button" class="link" onclick={() => (rating = null)}>Cancel</button>
+        </div>
+      {:else}
+        <div class="reactions" role="group" aria-label="Your reaction">
+          {#each reactionsFor(pick, mode) as reaction (reaction)}
+            <button type="button" class="react" disabled={busy} onclick={() => respond(reaction)}>{REACTION_LABEL[reaction]}</button>
+          {/each}
+        </div>
+      {/if}
+      {#if failure}<p class="small warn" role="alert">{failure}</p>{/if}
+    </section>
+  {/if}
 
   <section aria-labelledby="why">
     <h2 id="why">Why this?</h2>
@@ -194,6 +252,38 @@
 <style>
   .back {
     margin: -0.5rem 0 0.25rem;
+  }
+  .react-panel {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0.75rem 0 0.25rem;
+  }
+  .react-panel p {
+    margin: 0;
+  }
+  .reactions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+    gap: 0.35rem;
+  }
+  .react {
+    min-height: 2.75rem;
+    padding: 0.25rem 0.35rem;
+    border-color: var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.15;
+    text-align: center;
+  }
+  .seen-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .warn {
+    color: var(--warn);
   }
   .head {
     display: grid;

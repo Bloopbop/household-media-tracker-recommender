@@ -264,7 +264,7 @@ export function backtestMode(ctx: Context, mode: Mode, seed: number, draws = DRA
   for (let draw = 0; draw < draws * 2; draw++) {
     const random = seededRandom(seed * 100 + draw);
     const test = sample(rated, testSize, random);
-    const profile = buildProfile(input.library, mode, ctx.space, input.now, new Set(test.map((title) => title.key as string)));
+    const profile = buildProfile(input.library, mode, ctx.space, input.now, new Set(test.map((title) => title.key as string)), input.feedback[mode]);
     const cfIndex = buildCfIndex(profile, input.features, input.now);
     const score = (key: string, liked: boolean): Scored => ({
       key,
