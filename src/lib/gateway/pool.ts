@@ -3,7 +3,7 @@
 //   - TMDB's recommendation and similar lists of the 200 most recent liked titles,
 //   - /discover on each profile's top 5 genres, 10 keywords and 10 people (200+ votes),
 //   - titles on the household's streaming services,
-//   - this week's trending titles,
+//   - this week's trending titles, and popular titles,
 //   - the vault's recommendations (pool_seed).
 // Watchlists and would-rewatch titles are library titles, so the recommender
 // adds them itself. Every candidate then needs its TMDB details, fetched in
@@ -153,6 +153,16 @@ export async function buildPool(onProgress: (text: string) => void = () => {}): 
 
   addResults(await listed(() => trendingTitles(key)), 'trending', 5);
 
+  // Popular titles, chosen without the household's taste: they keep the pool
+  // from being only look-alikes, and give the recommendation check a fair
+  // set of titles to rank the household's favourites against.
+  for (const kind of ['movie', 'series'] as Kind[]) {
+    for (const page of [1, 2, 3]) {
+      const results = await listed(() => discoverTitles(key, kind, { sort_by: 'popularity.desc', 'vote_count.gte': MIN_VOTES, page }));
+      addResults(results, 'popular', 6 + (page - 1) * 0.2);
+    }
+  }
+
   const chosen = [...found.entries()]
     .sort((a, b) => a[1].rank - b[1].rank || b[1].sources.size - a[1].sources.size)
     .slice(0, POOL_MAX);
@@ -173,6 +183,7 @@ export async function buildPool(onProgress: (text: string) => void = () => {}): 
     { sql: 'DELETE FROM cache.title_feature WHERE key NOT IN (SELECT key FROM cache.tmdb_title)' },
   ]);
   await setGatewayState('pool_built_at', String(now));
+  await setGatewayState('pool_version', String(POOL_VERSION));
   return { size: chosen.length, calls, failed };
 }
 
@@ -181,8 +192,12 @@ export async function poolBuiltAt(): Promise<number | null> {
   return value ? Number(value) : null;
 }
 
+/** Bump when the pool's sources change, so the next run gathers it again. 2 added popular titles. */
+export const POOL_VERSION = 2;
+
 export async function poolIsDue(now = Date.now()): Promise<boolean> {
   const built = await poolBuiltAt();
+  if (Number((await getGatewayState('pool_version')) ?? 1) < POOL_VERSION) return true;
   return built == null || now - built >= POOL_REFRESH_DAYS * DAY_MS;
 }
 
