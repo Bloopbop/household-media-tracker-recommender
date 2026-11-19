@@ -251,9 +251,15 @@ export async function linkTitle(id: string, kind: Kind, tmdbId: number, name: st
     ]);
     return existing;
   }
+  // When the match changes, the old entry's IMDb id must not carry over: it would
+  // fetch the wrong review scores and relink to the wrong entry after the
+  // six-month purge. The new entry's details bring its own.
   await exec(
-    'UPDATE title SET kind = ?, tmdb_id = ?, tmdb_checked_at = ?, name = ?, year = ?, updated_at = ? WHERE id = ?',
-    [kind, tmdbId, at, name, year, at, id],
+    `UPDATE title
+        SET imdb_id = CASE WHEN tmdb_id IS NOT NULL AND (tmdb_id <> ? OR kind <> ?) THEN NULL ELSE imdb_id END,
+            kind = ?, tmdb_id = ?, tmdb_checked_at = ?, name = ?, year = ?, updated_at = ?
+      WHERE id = ?`,
+    [tmdbId, kind, kind, tmdbId, at, name, year, at, id],
   );
   return id;
 }

@@ -118,7 +118,7 @@
   const ADVICE: Record<string, string> = {
     'mentions a rewatch': 'Tick “Would rewatch” on the title page if it applies.',
     'per-season scores in the notes': 'The overall rating was imported. The season scores stay in the note.',
-    'title has a qualifier in brackets': 'Check the right version was matched.',
+    'title has a qualifier in brackets': 'Check the right version was matched. If not, open it and tap “Change the match”.',
     'film with a range of years': 'This note may cover more than one film. Add the others with Add, and check this match.',
     'film or documentary with a range of years': 'Probably a series. Check it was matched as one.',
   };
