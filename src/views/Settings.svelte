@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import {
     canShareFile,
+    combineBackup,
     createBackupFile,
+    describeMerge,
     downloadFile,
     recordBackup,
     restoreBackup,
@@ -24,7 +26,7 @@
 
   let names = $state({ A: app.profiles.A, B: app.profiles.B });
   let keys = $state({ tmdbKey: app.tmdbKey, omdbKey: app.omdbKey, region: app.region });
-  let message = $state({ profiles: '', keys: '', refresh: '', backup: '', restore: '', cache: '', services: '' });
+  let message = $state({ profiles: '', keys: '', refresh: '', backup: '', restore: '', merge: '', cache: '', services: '' });
   let providers = $state<RegionProvider[]>([]);
   let chosenServices = $state(new Set<number>());
   let showAllServices = $state(false);
@@ -39,6 +41,10 @@
   let backupFile = $state<File | null>(null);
   let shareRefused = $state(false);
   let restoreFile = $state<File | null>(null);
+  let mergeFile = $state<File | null>(null);
+  /** What combining the chosen file would add, in words; '' when nothing. */
+  let mergePreview = $state<string | null>(null);
+  let merging = $state(false);
   let armed = $state('');
 
   const when = (at: number | null) =>
@@ -210,6 +216,40 @@
     }
   }
 
+  async function previewCombine(file: File | null) {
+    mergeFile = file;
+    mergePreview = null;
+    message.merge = '';
+    if (!file) return;
+    message.merge = 'Reading the backup…';
+    try {
+      mergePreview = describeMerge(await combineBackup(file, false));
+      message.merge = '';
+    } catch (error) {
+      mergeFile = null;
+      message.merge = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function combine() {
+    if (!mergeFile || merging) return;
+    merging = true;
+    message.merge = 'Combining…';
+    try {
+      const added = describeMerge(await combineBackup(mergeFile, true));
+      mergeFile = null;
+      mergePreview = null;
+      message.merge = added ? `Combined: added ${added}.` : 'Nothing new to add.';
+      app.slatesVersion++;
+      changed();
+      await loadStatus();
+    } catch (error) {
+      message.merge = error instanceof Error ? error.message : String(error);
+    } finally {
+      merging = false;
+    }
+  }
+
   async function clearCachedData() {
     if (armed !== 'cache') {
       armed = 'cache';
@@ -373,6 +413,30 @@
     {/if}
     {#if message.restore}<p class="small" role="status">{message.restore}</p>{/if}
     <p class="muted small">Restoring keeps this device's keys and launch count.</p>
+  </div>
+
+  <div class="panel form" id="combine">
+    <label>
+      <span>Combine with the other phone</span>
+      <input
+        type="file"
+        onchange={(event) => previewCombine((event.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+      />
+    </label>
+    {#if mergeFile && mergePreview != null}
+      {#if mergePreview}
+        <p class="small">Combining adds {mergePreview} from the other phone. Nothing on this phone is deleted.</p>
+        <button type="button" disabled={merging} onclick={combine}>Combine</button>
+      {:else}
+        <p class="small">Nothing new: this phone already has everything in that backup.</p>
+      {/if}
+    {/if}
+    {#if message.merge}<p class="small" role="status">{message.merge}</p>{/if}
+    <p class="muted small">
+      Until the phones sync, use this to share what each of you entered. Every few days, make a backup on one phone, send the file to
+      the other and combine it there, then do the same the other way round. When both phones changed the same rating or status,
+      the later change is kept. Combining never deletes: something deleted on one phone comes back from the other.
+    </p>
   </div>
 </section>
 
