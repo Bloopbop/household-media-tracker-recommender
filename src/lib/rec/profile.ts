@@ -3,7 +3,7 @@
 // Pure, unit tested.
 
 import type { ProfileId } from '../types';
-import type { LibraryTitle, Mode } from './types';
+import type { LibraryTitle, Mode, ModeFeedback } from './types';
 import { addScaled, denseNorm, type VectorSpace } from './vectors';
 
 const YEAR_MS = 365.25 * 86_400_000;
@@ -54,7 +54,8 @@ export function hasSeen(title: LibraryTitle, person: ProfileId): boolean {
 
 export interface TrainingEntry {
   key: string;
-  titleId: string;
+  /** Null for a title known only from a reaction to a pick. */
+  titleId: string | null;
   name: string;
   /** On the rater's rating scale. */
   value: number;
@@ -125,9 +126,16 @@ export interface Profile {
   liked: TrainingEntry[];
 }
 
+/** A reaction's implicit signal on the rater's scale (spec, section 4: feedback signals). */
+function feedbackSignal(kind: 'skipped' | 'not_interested', points: ReferencePoints): number {
+  // Three Not tonights count as disliked; Not interested as one point below.
+  return kind === 'skipped' ? points.disliked : points.disliked - 1;
+}
+
 /**
  * Builds a rater's profile from their ratings and implicit signals.
  * holdOut removes titles (by key) as if never rated: the backtest's test set.
+ * feedback adds what reactions to picks say about titles without a rating.
  */
 export function buildProfile(
   library: LibraryTitle[],
@@ -135,6 +143,7 @@ export function buildProfile(
   space: VectorSpace,
   now: number,
   holdOut: Set<string> = new Set(),
+  feedback?: ModeFeedback,
 ): Profile {
   // Titles saved by name only still count toward the rater's scale.
   const known = library.filter((title) => !(title.key && holdOut.has(title.key)));
@@ -142,16 +151,26 @@ export function buildProfile(
   const points = referencePoints(explicitScores.map((rating) => rating.score));
 
   const entries: TrainingEntry[] = [];
+  const inLibrary = new Set<string>();
   for (const title of known) {
     if (!title.key) continue;
     const key = title.key;
+    inLibrary.add(key);
     const rating = explicitRating(title, mode);
     if (rating) {
       entries.push({ key, titleId: title.id, name: title.name, value: rating.score, weight: 1, at: rating.at, explicit: true });
       continue;
     }
-    const signal = implicitSignal(title, mode, points);
+    const reaction = feedback?.implicit.get(key);
+    const signal = reaction
+      ? { value: feedbackSignal(reaction.kind, points), weight: 0.5, at: reaction.at }
+      : implicitSignal(title, mode, points);
     if (signal) entries.push({ key, titleId: title.id, name: title.name, ...signal, explicit: false });
+  }
+  // Titles known only from reactions to picks.
+  for (const [key, reaction] of feedback?.implicit ?? []) {
+    if (inLibrary.has(key) || holdOut.has(key)) continue;
+    entries.push({ key, titleId: null, name: key, value: feedbackSignal(reaction.kind, points), weight: 0.5, at: reaction.at, explicit: false });
   }
 
   const values = explicitScores.map((rating) => rating.score);

@@ -188,6 +188,16 @@ export const HOUSEHOLD_MIGRATIONS: string[] = [
   CREATE INDEX signal_at ON signal (at);
   CREATE INDEX signal_key ON signal (title_key, type);
   `,
+
+  // 5. Phase 2 reactions. Each slate mixes picks from the recommender and from
+  // review scores alone; arm records which one placed a pick ('model',
+  // 'reviews' or 'explore'), on the pick and on every signal about it, so
+  // reactions can be credited after the slate itself is gone.
+  `
+  ALTER TABLE slate_item ADD COLUMN arm TEXT;
+  ALTER TABLE signal ADD COLUMN arm TEXT;
+  CREATE INDEX signal_mode ON signal (mode, type, at);
+  `,
 ];
 
 export const CACHE_MIGRATIONS: string[] = [

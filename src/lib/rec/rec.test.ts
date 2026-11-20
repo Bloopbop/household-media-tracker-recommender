@@ -247,8 +247,14 @@ describe('slates', () => {
     const slate = buildSlate(createContext(input), 'US');
     expect(slate.picks).toHaveLength(20);
     const ranked = slate.picks.filter((pick) => !pick.exploratory);
-    expect(ranked[0].name).toMatch(/^New space/);
-    expect(ranked.slice(0, 8).every((pick) => !pick.name.startsWith('New laugh'))).toBe(true);
+    // The recommender's own picks put the liked taste first; review scores alone favour the comedies.
+    const model = ranked.filter((pick) => pick.arm === 'model');
+    expect(model[0].name).toMatch(/^New space/);
+    expect(model.slice(0, 4).every((pick) => !pick.name.startsWith('New laugh'))).toBe(true);
+    expect(ranked.filter((pick) => pick.arm === 'reviews')[0].name).toMatch(/^New laugh/);
+    // The ranked places alternate between the two; exploratory picks belong to neither.
+    expect(Math.abs(model.length - ranked.filter((pick) => pick.arm === 'reviews').length)).toBeLessThanOrEqual(1);
+    expect(slate.picks.filter((pick) => pick.exploratory).every((pick) => pick.arm === 'explore')).toBe(true);
     expect(slate.picks.every((pick) => pick.reason.length <= REASON_MAX)).toBe(true);
     expect(slate.picks.some((pick) => /Space \d+/.test(pick.reason))).toBe(true);
     expect(slate.picks.every((pick) => !pick.titleId)).toBe(true);

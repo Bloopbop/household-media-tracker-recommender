@@ -16,6 +16,7 @@
   import Library from './views/Library.svelte';
   import Pick from './views/Pick.svelte';
   import RecCheck from './views/RecCheck.svelte';
+  import RecCompare from './views/RecCompare.svelte';
   import Recommend from './views/Recommend.svelte';
   import Settings from './views/Settings.svelte';
   import TitleDetail from './views/TitleDetail.svelte';
@@ -23,7 +24,7 @@
   const tab = $derived.by(() => {
     const name = router.route.name;
     if (name === 'recommend' || name === 'pick') return 'recommend';
-    if (name === 'settings' || name === 'device-check' || name === 'about' || name === 'import' || name === 'rec-check') return 'settings';
+    if (name === 'settings' || name === 'device-check' || name === 'about' || name === 'import' || name === 'rec-check' || name === 'rec-compare') return 'settings';
     return 'library';
   });
 
@@ -102,6 +103,8 @@
       {/key}
     {:else if router.route.name === 'rec-check'}
       <RecCheck />
+    {:else if router.route.name === 'rec-compare'}
+      <RecCompare />
     {/if}
   </div>
 

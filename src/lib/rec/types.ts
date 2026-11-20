@@ -48,6 +48,23 @@ export type Eligibility =
   | { type: 'rewatch'; score: number; seenBy: ProfileId[] }
   | { type: 'excluded' };
 
+/** What the household's reactions say about titles in one mode. */
+export interface ModeFeedback {
+  /** Kept out of this mode's slates: Not tonight for 14 days, a fatigue rest, Together's Not interested. */
+  hidden: Set<string>;
+  /**
+   * Implicit signals for titles without a rating in this mode: three Not
+   * tonights count as disliked; Together's Not interested as one point below.
+   */
+  implicit: Map<string, { kind: 'skipped' | 'not_interested'; at: number }>;
+}
+
+export const noFeedback = (): Record<Mode, ModeFeedback> => ({
+  A: { hidden: new Set(), implicit: new Map() },
+  B: { hidden: new Set(), implicit: new Map() },
+  US: { hidden: new Set(), implicit: new Map() },
+});
+
 export interface RecInput {
   now: number;
   library: LibraryTitle[];
@@ -62,6 +79,7 @@ export interface RecInput {
   services: number[] | null;
   names: { A: string; B: string };
   weights: Weights;
+  feedback: Record<Mode, ModeFeedback>;
 }
 
 export interface Evidence {
@@ -79,8 +97,17 @@ export interface Evidence {
   seenBy?: ProfileId[];
 }
 
+/**
+ * Which ranking placed a pick. Each slate's ranked places alternate between
+ * the recommender ('model') and review scores alone ('reviews'), unlabelled,
+ * so the household's reactions show which finds more they want to watch.
+ * Exploratory picks are 'explore' and count for neither.
+ */
+export type Arm = 'model' | 'reviews' | 'explore';
+
 export interface SlatePick {
   key: string;
+  arm: Arm;
   titleId: string | null;
   kind: Kind;
   name: string;
@@ -99,7 +126,10 @@ export interface SlateResult {
   mode: Mode;
   /** The visible picks, in order: 16 ranked and 4 exploratory at 5, 10, 15 and 20. */
   picks: SlatePick[];
-  /** The next best picks, to refill the slate when one leaves. */
+  /**
+   * The next picks, to refill the slate when one leaves: ranked ones continue
+   * the same alternation, exploratory ones refill exploratory places.
+   */
   reserve: SlatePick[];
   stats: {
     candidates: number;

@@ -214,7 +214,18 @@ export interface NewTitle {
   name: string;
   year: number | null;
   tmdbId?: number | null;
-  source: 'search' | 'stub' | 'vault';
+  /** 'slate': added by a reaction to a pick on For you. */
+  source: 'search' | 'stub' | 'vault' | 'slate';
+}
+
+/** The statement that adds a title, for writes that must run in one transaction with it. */
+export function newTitleStatement(id: string, input: NewTitle): Statement {
+  const at = now();
+  return {
+    sql: `INSERT INTO title (id, kind, name, year, tmdb_id, tmdb_checked_at, source, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    bind: [id, input.kind, input.name.trim(), input.year, input.tmdbId ?? null, input.tmdbId != null ? at : null, input.source, at, at],
+  };
 }
 
 export async function addTitle(input: NewTitle): Promise<string> {
@@ -223,12 +234,7 @@ export async function addTitle(input: NewTitle): Promise<string> {
     if (existing) return existing;
   }
   const id = uuid();
-  const at = now();
-  await exec(
-    `INSERT INTO title (id, kind, name, year, tmdb_id, tmdb_checked_at, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.kind, input.name.trim(), input.year, input.tmdbId ?? null, input.tmdbId != null ? at : null, input.source, at, at],
-  );
+  await batch([newTitleStatement(id, input)]);
   return id;
 }
 
@@ -278,7 +284,7 @@ export async function markTmdbChecked(id: string, imdbId: string | null): Promis
 
 // ---------------------------------------------------------- ratings & states
 
-function ratingStatement(rater: Rater, titleId: string, score: number | null, source: string): Statement {
+export function ratingStatement(rater: Rater, titleId: string, score: number | null, source: string): Statement {
   if (score == null) return { sql: 'DELETE FROM rating WHERE rater = ? AND title_id = ?', bind: [rater, titleId] };
   if (!isValidRating(score)) throw new Error(`Invalid rating: ${score}`);
   return {
@@ -288,7 +294,7 @@ function ratingStatement(rater: Rater, titleId: string, score: number | null, so
   };
 }
 
-function stateStatement(person: ProfileId, titleId: string, status: Status | null): Statement {
+export function stateStatement(person: ProfileId, titleId: string, status: Status | null): Statement {
   return {
     sql: `INSERT INTO title_state (profile_id, title_id, status, updated_at) VALUES (?, ?, ?, ?)
           ON CONFLICT (profile_id, title_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at`,
@@ -334,6 +340,23 @@ export interface WatchInput {
   ratings: Partial<Record<Rater, number>>;
 }
 
+/**
+ * Logs a watch as a pick when the title was shown on For you in the last 14
+ * days (spec, section 4: the Pick signal), crediting the ranking that
+ * placed it. Nothing happens for a title that was not shown.
+ */
+function pickStatement(titleId: string, participants: number): Statement {
+  return {
+    sql: `INSERT INTO signal (id, at, mode, type, title_key, title_id, slate_id, rank, session, arm)
+          SELECT ?, ?, s.mode, 'pick', s.title_key, ?, s.slate_id, s.rank, s.session, s.arm
+            FROM signal s JOIN title t ON t.tmdb_id IS NOT NULL AND s.title_key = t.kind || ':' || t.tmdb_id
+           WHERE t.id = ? AND s.type = 'impression' AND s.at >= ?
+             AND (s.mode = 'US' OR (s.mode = 'A' AND (? & 1) != 0) OR (s.mode = 'B' AND (? & 2) != 0))
+           ORDER BY s.at DESC LIMIT 1`,
+    bind: [uuid(), now(), titleId, titleId, now() - 14 * 86_400_000, participants, participants],
+  };
+}
+
 export async function markWatched(input: WatchInput): Promise<void> {
   const participants = participantsFor(input.who);
   const people = profilesIn(participants);
@@ -356,6 +379,7 @@ export async function markWatched(input: WatchInput): Promise<void> {
       ],
     },
     ...people.map((person) => stateStatement(person, input.titleId, OUTCOME_STATUS[input.outcome])),
+    pickStatement(input.titleId, participants),
   ];
   for (const [rater, score] of Object.entries(input.ratings) as [Rater, number][]) {
     statements.push(ratingStatement(rater, input.titleId, score, 'manual'));

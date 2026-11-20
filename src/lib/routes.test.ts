@@ -19,6 +19,7 @@ describe('routes', () => {
       { name: 'pick', key: 'movie:550', mode: 'US' },
       { name: 'pick', key: 'series:1396', mode: 'B' },
       { name: 'rec-check' },
+      { name: 'rec-compare' },
     ];
     for (const route of routes) expect(parseRoute(href(route))).toEqual(route);
   });

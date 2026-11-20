@@ -328,7 +328,9 @@
         Gather candidates now
       </button>
     </div>
-    <p class="small"><a {...nav({ name: 'rec-check' })}>Recommendation check</a></p>
+    <p class="small">
+      <a {...nav({ name: 'rec-compare' })}>Picks compared</a> · <a {...nav({ name: 'rec-check' })}>Recommendation check</a>
+    </p>
   </div>
 </section>
 

@@ -5,10 +5,14 @@
   import { buildSlates } from '../lib/rec/engine';
   import { monthSeed } from '../lib/rec/random';
   import { isNeutral, type Mode, type Weights } from '../lib/rec/types';
-  import { back } from '../lib/router.svelte';
+  import { back, nav } from '../lib/router.svelte';
   import { app } from '../lib/state.svelte';
 
-  /** The MVP gate (spec, section 5). */
+  /**
+   * The offline target this page used to call the phase 2 gate. Since
+   * 19 November 2026 the gate is judged on the household's reactions, in Picks
+   * compared; this check stays as a diagnostic.
+   */
   const GATE_LIFT = 0.05;
   const GATE_MS = 1500;
 
@@ -114,7 +118,7 @@
     }
     lines.push(
       `Timing: open to picks ${app.slateShownMs != null ? ms(app.slateShownMs) : 'not measured'}; load ${ms(run.loadMs)}; slates ${ms(run.slateMs)}; check ${ms(run.backtestMs)}`,
-      `Gate vs neutral, current balance: lift ${GATE_LIFT}+ in every mode ${liftPasses ? 'pass' : 'not yet'}; best balance on fresh draws ${tunedPasses ? 'pass' : 'not yet'}; picks under 1.5 s ${speedPasses ? 'pass' : 'not yet'}`,
+      `Offline target vs neutral, current balance: lift ${GATE_LIFT}+ in every mode ${liftPasses ? 'pass' : 'not yet'}; best balance on fresh draws ${tunedPasses ? 'pass' : 'not yet'}; picks under 1.5 s ${speedPasses ? 'pass' : 'not yet'}`,
     );
     return lines.join('\n');
   }
@@ -145,7 +149,11 @@
 
 {#if result}
   <section aria-labelledby="verdict" class="panel verdict">
-    <h2 id="verdict">Phase 2 gate</h2>
+    <h2 id="verdict">Offline target</h2>
+    <p class="small muted">
+      Not the gate any more: the phase 2 gate is judged on your reactions to picks, in
+      <a {...nav({ name: 'rec-compare' })}>Picks compared</a>. This check stays as a diagnostic.
+    </p>
     <p class:pass={liftPasses}>
       {liftPasses ? 'Pass' : 'Not yet'}: the recommender finds more of your hidden favourites than review scores alone, by at
       least {GATE_LIFT}, in every mode.

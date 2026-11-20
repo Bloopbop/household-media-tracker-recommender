@@ -12,7 +12,8 @@ export type Route =
   | { name: 'import' }
   | { name: 'agree'; person: 'A' | 'B' }
   | { name: 'pick'; key: string; mode: 'A' | 'B' | 'US' }
-  | { name: 'rec-check' };
+  | { name: 'rec-check' }
+  | { name: 'rec-compare' };
 
 /** The app opens on recommendations (spec, story R1). */
 export const HOME: Route = { name: 'recommend' };
@@ -44,6 +45,7 @@ export function parseRoute(hash: string): Route {
       if (parts[1] === 'device-check') return { name: 'device-check' };
       if (parts[1] === 'about') return { name: 'about' };
       if (parts[1] === 'recommendation-check') return { name: 'rec-check' };
+      if (parts[1] === 'picks-compared') return { name: 'rec-compare' };
       return { name: 'settings' };
     default:
       return HOME;
@@ -77,5 +79,7 @@ export function href(route: Route): string {
       return `#/pick/${encodeURIComponent(route.key)}?mode=${route.mode}`;
     case 'rec-check':
       return '#/settings/recommendation-check';
+    case 'rec-compare':
+      return '#/settings/picks-compared';
   }
 }

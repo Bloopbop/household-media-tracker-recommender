@@ -1,11 +1,15 @@
 // Builds a slate of picks for each mode (spec, section 3, steps 2 to 7):
 // filter per mode, score the four components, adjust for availability,
-// diversify, fill the exploratory slots and explain each pick. Pure, unit
-// tested; the caller loads the data and saves the result.
+// diversify, fill the exploratory slots and explain each pick. The ranked
+// places alternate between the recommender and review scores alone (see
+// interleave.ts). Pure, unit tested; the caller loads the data and saves the
+// result.
 
 import type { ProfileId } from '../types';
 import type { FeatureRow } from './features';
+import { arrange, daySeed, teamDraft, type DraftArm } from './interleave';
 import { buildProfile, explicitRating, hasSeen, peopleIn, type Profile } from './profile';
+import { seededRandom } from './random';
 import { reasonFor } from './reasons';
 import {
   availability,
@@ -17,11 +21,22 @@ import {
   type CfEntry,
   type ExternalScores,
 } from './score';
-import { MODES, type Components, type Eligibility, type LibraryTitle, type Mode, type RecInput, type SlatePick, type SlateResult, type Weights } from './types';
+import {
+  MODES,
+  type Arm,
+  type Components,
+  type Eligibility,
+  type LibraryTitle,
+  type Mode,
+  type RecInput,
+  type SlatePick,
+  type SlateResult,
+  type Weights,
+} from './types';
 import { dot, dotDense, VectorSpace } from './vectors';
 
 /** Changes whenever scoring changes, so saved slates are rebuilt. */
-export const MODEL_VERSION = 'p2.2';
+export const MODEL_VERSION = 'p2.3';
 export const SLATE_SIZE = 20;
 /** Positions (1-based) held for exploratory picks. */
 export const EXPLORATORY_POSITIONS = [5, 10, 15, 20];
@@ -106,6 +121,8 @@ export function componentScores(
 
 interface Scored extends ComponentScores {
   feature: FeatureRow;
+  /** Which ranking placed it; set when the slate is drawn. */
+  arm?: Arm;
   titleId: string | null;
   score: number;
   contributions: Components;
@@ -121,6 +138,7 @@ interface Scored extends ComponentScores {
 function usualGenres(profile: Profile, features: Map<string, FeatureRow>, count: number): Set<string> {
   const seen = new Map<string, number>();
   for (const entry of profile.entries) {
+    if (entry.titleId == null) continue; // known only from a reaction, not watched
     for (const genre of features.get(entry.key)?.genres ?? []) seen.set(genre, (seen.get(genre) ?? 0) + 1);
   }
   return new Set([...seen.entries()].sort((a, b) => b[1] - a[1]).slice(0, count).map(([genre]) => genre));
@@ -173,7 +191,9 @@ function scoreAll(ctx: Context, mode: Mode, profile: Profile): { ranked: Scored[
 
   // First the raw parts of every candidate in this mode, then percentiles among them.
   const raw: { feature: FeatureRow; title: LibraryTitle | undefined; allowed: Eligibility; scores: ComponentScores; components: Components }[] = [];
+  const hidden = input.feedback[mode].hidden;
   for (const key of new Set([...input.pool.keys(), ...ctx.library.keys()])) {
+    if (hidden.has(key)) continue;
     const feature = input.features.get(key);
     if (!feature) continue;
     const title = ctx.library.get(key);
@@ -220,9 +240,46 @@ function scoreAll(ctx: Context, mode: Mode, profile: Profile): { ranked: Scored[
   return { ranked, cold, cfIndex };
 }
 
+/**
+ * The recommender's own order: maximal marginal relevance over the top 100
+ * (relevance weight 0.7), so near-duplicates do not crowd the top; the rest
+ * follow by score.
+ */
+function mmrOrder(ranked: Scored[], similarity: (a: Scored, b: Scored) => number): Scored[] {
+  const top = ranked.slice(0, MMR_TOP);
+  const penalty = new Float64Array(top.length);
+  const done = new Uint8Array(top.length);
+  const order: Scored[] = [];
+  for (let step = 0; step < top.length; step++) {
+    let best = -1;
+    let bestValue = -Infinity;
+    for (let index = 0; index < top.length; index++) {
+      if (done[index]) continue;
+      const value = MMR_LAMBDA * top[index].final - (1 - MMR_LAMBDA) * penalty[index];
+      if (value > bestValue) {
+        bestValue = value;
+        best = index;
+      }
+    }
+    done[best] = 1;
+    order.push(top[best]);
+    for (let index = 0; index < top.length; index++) {
+      if (!done[index]) penalty[index] = Math.max(penalty[index], similarity(top[index], top[best]));
+    }
+  }
+  return [...order, ...ranked.slice(MMR_TOP)];
+}
+
+/** Review scores alone: the best-reviewed candidates first, with the same availability adjustment. */
+function reviewsOrder(ranked: Scored[]): Scored[] {
+  const value = (item: Scored) => (item.components.quality ?? 0) * item.availability.factor;
+  return [...ranked].sort((a, b) => value(b) - value(a) || a.feature.key.localeCompare(b.feature.key));
+}
+
 export function buildSlate(ctx: Context, mode: Mode): SlateResult {
   const { input, space } = ctx;
-  const profile = buildProfile(input.library, mode, space, input.now);
+  const feedback = input.feedback[mode];
+  const profile = buildProfile(input.library, mode, space, input.now, new Set(), feedback);
   const { ranked, cold, cfIndex } = scoreAll(ctx, mode, profile);
   const similarity = (a: Scored, b: Scored) => {
     const va = space.vector(a.feature.key);
@@ -230,62 +287,60 @@ export function buildSlate(ctx: Context, mode: Mode): SlateResult {
     return va && vb ? dot(va, vb) : 0;
   };
 
-  // Ranked picks: maximal marginal relevance over the top 100, within the caps.
+  // Ranked places: the recommender and review scores alone take turns, within the caps.
   const caps = new Caps();
+  const taken = new Set<string>();
+  const draft = teamDraft<Scored>(
+    { model: mmrOrder(ranked, similarity), reviews: reviewsOrder(ranked) },
+    {
+      key: (item) => item.feature.key,
+      fits: (item) => caps.fits(item),
+      add: (item) => caps.add(item),
+      random: seededRandom(daySeed(input.now, mode)),
+      taken,
+    },
+  );
   const chosen: Scored[] = [];
-  const remaining = ranked.slice(0, MMR_TOP);
   const pickRanked = (count: number) => {
-    for (let added = 0; added < count && remaining.length > 0; added++) {
-      let best = -1;
-      let bestValue = -Infinity;
-      remaining.forEach((item, index) => {
-        if (!caps.fits(item)) return;
-        const penalty = chosen.length ? Math.max(...chosen.map((other) => similarity(item, other))) : 0;
-        const value = MMR_LAMBDA * item.final - (1 - MMR_LAMBDA) * penalty;
-        if (value > bestValue) {
-          bestValue = value;
-          best = index;
-        }
-      });
-      if (best < 0) return;
-      const [item] = remaining.splice(best, 1);
+    for (const { item, arm } of draft.take(count)) {
+      item.arm = arm satisfies DraftArm;
       chosen.push(item);
-      caps.add(item);
     }
   };
   pickRanked(SLATE_SIZE - EXPLORATORY_POSITIONS.length);
 
   // Exploratory picks: cold titles that match the taste; then well-reviewed
   // titles from genres outside the viewer's top five.
+  const usual = usualGenres(profile, input.features, 5);
+  const disliked = dislikedGenres(profile, input.features);
   const exploratory: { item: Scored; kind: 'cold' | 'outside' }[] = [];
-  const pickCold = () => {
+  const pickExploratory = (limit: number) => {
+    const before = exploratory.length;
+    const room = () => exploratory.length - before < limit;
     for (const item of cold) {
-      if (exploratory.length >= EXPLORATORY_POSITIONS.length) break;
-      if (exploratory.some((entry) => entry.item === item)) continue;
+      if (!room()) return;
+      if (taken.has(item.feature.key)) continue;
       if ((item.components.content ?? 0) >= EXPLORE_MIN_CONTENT && caps.fits(item)) {
         exploratory.push({ item, kind: 'cold' });
+        taken.add(item.feature.key);
+        caps.add(item);
+      }
+    }
+    // Outside the five genres the viewer watches most, and not one they rate poorly.
+    const outside = [...ranked, ...cold]
+      .filter((item) => !taken.has(item.feature.key) && !item.rewatch && item.components.quality != null)
+      .filter((item) => item.feature.genres.length > 0 && !usual.has(item.feature.genres[0]) && !disliked.has(item.feature.genres[0]))
+      .sort((a, b) => (b.components.quality ?? 0) * b.availability.factor - (a.components.quality ?? 0) * a.availability.factor);
+    for (const item of outside) {
+      if (!room()) return;
+      if (caps.fits(item)) {
+        exploratory.push({ item, kind: 'outside' });
+        taken.add(item.feature.key);
         caps.add(item);
       }
     }
   };
-  pickCold();
-  if (exploratory.length < EXPLORATORY_POSITIONS.length) {
-    // Outside the five genres the viewer watches most, and not one they rate poorly.
-    const usual = usualGenres(profile, input.features, 5);
-    const disliked = dislikedGenres(profile, input.features);
-    const used = new Set([...chosen, ...exploratory.map((entry) => entry.item)].map((item) => item.feature.key));
-    const outside = [...ranked, ...cold]
-      .filter((item) => !used.has(item.feature.key) && !item.rewatch && item.components.quality != null)
-      .filter((item) => item.feature.genres.length > 0 && !usual.has(item.feature.genres[0]) && !disliked.has(item.feature.genres[0]))
-      .sort((a, b) => (b.components.quality ?? 0) * b.availability.factor - (a.components.quality ?? 0) * a.availability.factor);
-    for (const item of outside) {
-      if (exploratory.length >= EXPLORATORY_POSITIONS.length) break;
-      if (caps.fits(item)) {
-        exploratory.push({ item, kind: 'outside' });
-        caps.add(item);
-      }
-    }
-  }
+  pickExploratory(EXPLORATORY_POSITIONS.length);
 
   // Exploratory slots nobody could fill go to ranked picks.
   pickRanked(EXPLORATORY_POSITIONS.length - exploratory.length);
@@ -293,23 +348,30 @@ export function buildSlate(ctx: Context, mode: Mode): SlateResult {
   // Still short: let the genre cap give way rather than show fewer picks.
   if (chosen.length + exploratory.length < SLATE_SIZE) {
     caps.relaxGenre = true;
-    pickCold();
+    pickExploratory(EXPLORATORY_POSITIONS.length - exploratory.length);
     pickRanked(SLATE_SIZE - chosen.length - exploratory.length);
   }
 
-  // Interleave: exploratory picks at positions 5, 10, 15 and 20.
-  const visible: { item: Scored; exploratory: 'cold' | 'outside' | null }[] = [];
-  let r = 0;
-  let e = 0;
-  for (let position = 1; position <= SLATE_SIZE; position++) {
-    if (EXPLORATORY_POSITIONS.includes(position) && e < exploratory.length) {
-      visible.push({ item: exploratory[e].item, exploratory: exploratory[e++].kind });
-    } else if (r < chosen.length) visible.push({ item: chosen[r++], exploratory: null });
-    else if (e < exploratory.length) visible.push({ item: exploratory[e].item, exploratory: exploratory[e++].kind });
-  }
+  // Reserves refill places as picks leave: ranked ones continue the same
+  // alternation, exploratory ones refill exploratory places.
+  const visibleExploratory = exploratory.length;
+  pickRanked(RESERVE_SIZE);
+  if (visibleExploratory === EXPLORATORY_POSITIONS.length) pickExploratory(EXPLORATORY_POSITIONS.length);
+  for (const entry of exploratory) entry.item.arm = 'explore';
 
-  const shown = new Set(visible.map((entry) => entry.item.feature.key));
-  const reserve = ranked.filter((item) => !shown.has(item.feature.key)).slice(0, RESERVE_SIZE);
+  const kinds = new Map(exploratory.map((entry) => [entry.item.feature.key, entry.kind]));
+  const all = [
+    ...chosen.map((item) => ({ key: item.feature.key, exploratory: false, item })),
+    ...exploratory.map((entry) => ({ key: entry.item.feature.key, exploratory: true, item: entry.item })),
+  ];
+  const visible = arrange(
+    [...all.filter((entry) => !entry.exploratory), ...all.filter((entry) => entry.exploratory).slice(0, visibleExploratory)],
+    new Set(),
+    SLATE_SIZE,
+    EXPLORATORY_POSITIONS,
+  );
+  const shown = new Set(visible.map((entry) => entry.key));
+  const reserve = all.filter((entry) => !shown.has(entry.key));
 
   const cited = new Map<string, number>();
   const toPick = (item: Scored, kind: 'cold' | 'outside' | null): SlatePick => {
@@ -329,6 +391,7 @@ export function buildSlate(ctx: Context, mode: Mode): SlateResult {
     });
     return {
       key: item.feature.key,
+      arm: item.arm ?? 'model',
       titleId: item.titleId,
       kind: item.feature.kind,
       name: item.feature.name,
@@ -361,8 +424,8 @@ export function buildSlate(ctx: Context, mode: Mode): SlateResult {
 
   return {
     mode,
-    picks: visible.map((entry) => toPick(entry.item, entry.exploratory)),
-    reserve: reserve.map((item) => toPick(item, null)),
+    picks: visible.map((entry) => toPick(entry.item, entry.exploratory ? (kinds.get(entry.key) ?? 'cold') : null)),
+    reserve: reserve.map((entry) => toPick(entry.item, entry.exploratory ? (kinds.get(entry.key) ?? 'cold') : null)),
     stats: {
       candidates: ranked.length + cold.length,
       ratings: profile.ratings,

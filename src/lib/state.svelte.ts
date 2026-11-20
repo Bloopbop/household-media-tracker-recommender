@@ -30,6 +30,9 @@ export const app = $state({
   slateShownMs: null as number | null,
 });
 
+/** Identifies this run of the app on signals: one session from launch to close. */
+export const SESSION_ID = crypto.randomUUID();
+
 export function changed(): void {
   app.version++;
 }

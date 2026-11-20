@@ -1,16 +1,25 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import Poster from '../components/Poster.svelte';
+  import RatingPicker from '../components/RatingPicker.svelte';
   import { refreshSlates, runRecJob } from '../lib/rec/job';
-  import { getLastMode, loadSlate, setLastMode, type StoredSlate } from '../lib/rec/store';
+  import { logImpression, react, REACTION_LABEL, reactionsFor, type Done, type Reaction, type Target } from '../lib/rec/reactions';
+  import { getLastMode, loadSlate, setLastMode, type StoredPick, type StoredSlate } from '../lib/rec/store';
   import { MODES, type Mode } from '../lib/rec/types';
   import { nav } from '../lib/router.svelte';
   import { app } from '../lib/state.svelte';
-  import { KIND_LABEL } from '../lib/types';
+  import { KIND_LABEL, type ProfileId } from '../lib/types';
 
   let mode = $state<Mode | null>(null);
   let slate = $state<StoredSlate | null>(null);
   let loaded = $state(false);
+  /** The pick whose Seen it is asking for a rating. */
+  let rating = $state<{ key: string; value: number | null } | null>(null);
+  let busy = $state(false);
+  let failure = $state('');
+  /** The last reaction, while it can still be undone. */
+  let done = $state<Done | null>(null);
+  let doneTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
     void getLastMode().then((last) => (mode = last));
@@ -36,7 +45,70 @@
   }
 
   const label = (value: Mode) => (value === 'US' ? 'Together' : app.profiles[value]);
+  const listLabel = (people: ProfileId[]) =>
+    mode !== 'US' ? 'On your list' : people.length === 2 ? 'On both lists' : `On ${app.profiles[people[0]]}'s list`;
   const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+  async function respond(pick: StoredPick, position: number, reaction: Reaction) {
+    if (!mode || busy) return;
+    // Seen it asks for a rating first.
+    if (reaction === 'seen' && rating?.key !== pick.key) {
+      rating = { key: pick.key, value: null };
+      return;
+    }
+    busy = true;
+    failure = '';
+    try {
+      const result = await react({ mode, pick, position }, reaction, reaction === 'seen' ? (rating?.value ?? null) : null);
+      rating = null;
+      done = result;
+      clearTimeout(doneTimer);
+      doneTimer = setTimeout(() => (done = null), 8000);
+    } catch (error) {
+      failure = `That didn't save: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function undo() {
+    const last = done;
+    done = null;
+    clearTimeout(doneTimer);
+    if (last) await last.undo();
+  }
+
+  // Impressions: a pick counts as shown once half of it is on screen.
+  const targets = new Map<Element, Target>();
+  let observer: IntersectionObserver | undefined;
+
+  function shown(node: HTMLElement, target: Target) {
+    observer ??= new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const current = targets.get(entry.target);
+          if (entry.isIntersecting && current) logImpression(current);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    targets.set(node, target);
+    observer.observe(node);
+    return {
+      update(next: Target) {
+        targets.set(node, next);
+      },
+      destroy() {
+        targets.delete(node);
+        observer?.unobserve(node);
+      },
+    };
+  }
+
+  onDestroy(() => {
+    observer?.disconnect();
+    clearTimeout(doneTimer);
+  });
 </script>
 
 <h1>For you</h1>
@@ -56,25 +128,46 @@
 
 {#if slate && slate.picks.length > 0 && mode}
   <ol class="slate">
-    {#each slate.picks as pick (pick.key)}
-      <li>
+    {#each slate.picks as pick, index (pick.key)}
+      <li use:shown={{ mode, pick, position: index + 1 }}>
         <a class="pick" {...nav({ name: 'pick', key: pick.key, mode })}>
           <span class="thumb"><Poster path={pick.posterPath} name={pick.name} /></span>
           <span class="text">
             <span class="name">{pick.name}</span>
             <span class="meta">{KIND_LABEL[pick.kind]}{pick.year ? ` · ${pick.year}` : ''} · {pick.evidence.availability.label}</span>
             <span class="reason">{pick.reason}</span>
-            {#if pick.exploratory || pick.rewatch}
+            {#if pick.exploratory || pick.rewatch || pick.listedBy.length}
               <span class="tags">
                 {#if pick.exploratory}<span class="tag">Exploratory</span>{/if}
                 {#if pick.rewatch}<span class="tag">Rewatch</span>{/if}
+                {#if pick.listedBy.length}<span class="tag">{listLabel(pick.listedBy)}</span>{/if}
               </span>
             {/if}
           </span>
         </a>
+        {#if rating?.key === pick.key}
+          <div class="seen">
+            <RatingPicker bind:value={rating.value} label={mode === 'US' ? 'Your agreed rating' : `${app.profiles[mode]}'s rating`} />
+            <div class="seen-actions">
+              <button type="button" disabled={busy} onclick={() => respond(pick, index + 1, 'seen')}>
+                {rating.value == null ? 'Save without a rating' : 'Save'}
+              </button>
+              <button type="button" class="link" onclick={() => (rating = null)}>Cancel</button>
+            </div>
+          </div>
+        {:else}
+          <div class="reactions" role="group" aria-label={`Your reaction to ${pick.name}`}>
+            {#each reactionsFor(pick, mode) as reaction (reaction)}
+              <button type="button" class="react" disabled={busy} onclick={() => respond(pick, index + 1, reaction)}>
+                {REACTION_LABEL[reaction]}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </li>
     {/each}
   </ol>
+  {#if failure}<p class="warn small" role="alert">{failure}</p>{/if}
   <p class="small muted footer">
     Picked from {slate.stats.candidates.toLocaleString()} candidates · updated {when(slate.createdAt)}
   </p>
@@ -90,6 +183,13 @@
       <p>No picks yet.</p>
       <button type="button" onclick={() => runRecJob()}>Look for picks now</button>
     {/if}
+  </div>
+{/if}
+
+{#if done}
+  <div class="done" role="status">
+    <span>{done.message}</span>
+    <button type="button" class="link" onclick={undo}>Undo</button>
   </div>
 {/if}
 
@@ -171,6 +271,62 @@
   }
   .footer {
     margin-top: 1.25rem;
+  }
+  .slate li {
+    display: grid;
+    gap: 0.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .reactions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+    gap: 0.35rem;
+  }
+  .react {
+    min-height: 2.75rem;
+    padding: 0.25rem 0.35rem;
+    border-color: var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.15;
+    text-align: center;
+  }
+  .seen {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .seen-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .done {
+    position: fixed;
+    inset: auto 1rem calc(4rem + env(safe-area-inset-bottom)) 1rem;
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 0.25rem 0.5rem 0.25rem 1rem;
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 0.9rem;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+  }
+  .done .link {
+    color: var(--on-accent);
+    font-weight: 700;
   }
   .empty {
     display: grid;
