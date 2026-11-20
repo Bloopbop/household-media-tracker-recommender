@@ -8,6 +8,7 @@
 // Requests are handled strictly one at a time, in arrival order.
 
 import sqlite3InitModule, { type Database, type SAHPoolUtil } from '@sqlite.org/sqlite-wasm';
+import { runMerge, type MergeSummary } from './merge';
 import { CACHE_MIGRATIONS, DEVICE_ONLY_SETTINGS_SQL, HOUSEHOLD_MIGRATIONS } from './schema';
 
 export interface DbOpenInfo {
@@ -31,6 +32,7 @@ export type DbRequest =
   | { id: number; op: 'batch'; statements: Statement[] }
   | { id: number; op: 'exportHousehold' }
   | { id: number; op: 'importHousehold'; bytes: Uint8Array }
+  | { id: number; op: 'mergeHousehold'; bytes: Uint8Array; apply: boolean }
   | { id: number; op: 'clearCache' };
 
 export type DbResponse =
@@ -41,6 +43,7 @@ const HOUSEHOLD = '/household.db';
 const CACHE = '/cache.db';
 const RESTORE_CHECK = '/restore-check.db';
 const BACKUP_TEMP = '/backup-temp.db';
+const MERGE_TEMP = '/merge-temp.db';
 const SQLITE_HEADER = 'SQLite format 3\u0000';
 
 type Sqlite3 = Awaited<ReturnType<typeof sqlite3InitModule>>;
@@ -57,8 +60,7 @@ function requireDb(): Database {
 
 const uri = (name: string) => (pool ? `file:${name}?vfs=${pool.vfsName}` : ':memory:');
 
-function migrate(schema: 'main' | 'cache', migrations: string[]): number {
-  const database = requireDb();
+function migrate(schema: 'main' | 'cache', migrations: string[], database: Database = requireDb()): number {
   const current = Number(database.selectValue(`PRAGMA ${schema}.user_version`) ?? 0);
   if (current > migrations.length) {
     throw new Error('This data was saved by a newer version of the app. Reload to update the app.');
@@ -94,8 +96,9 @@ async function open(): Promise<DbOpenInfo> {
       directory: '/hmtr-sqlite',
       initialCapacity: 10,
     });
-    // Household, cache, their journals, and temporary copies for backups.
-    await pool.reserveMinimumCapacity(10);
+    // Household, cache, their journals, and temporary copies for backups,
+    // restores and combining with another phone.
+    await pool.reserveMinimumCapacity(12);
   } catch (error) {
     // Usually: OPFS is unavailable, or the app is open in a second tab.
     storageError = error instanceof Error ? error.message : String(error);
@@ -164,8 +167,8 @@ async function exportHousehold(): Promise<Uint8Array> {
   return bytes;
 }
 
-function checkBackup(storage: SAHPoolUtil): void {
-  const check = new storage.OpfsSAHPoolDb(RESTORE_CHECK);
+function checkBackup(storage: SAHPoolUtil, file = RESTORE_CHECK): void {
+  const check = new storage.OpfsSAHPoolDb(file);
   try {
     if (check.selectValue('PRAGMA quick_check') !== 'ok') throw new Error('The backup file is damaged.');
     const version = Number(check.selectValue('PRAGMA user_version') ?? 0);
@@ -220,6 +223,37 @@ async function importHousehold(bytes: Uint8Array): Promise<{ titles: number }> {
   return { titles };
 }
 
+/**
+ * Combines another phone's backup into this one (merge.ts). With apply false
+ * it only counts what combining would add. An older backup is brought up to
+ * date first; this phone's data is changed only when applying.
+ */
+async function mergeHousehold(bytes: Uint8Array, apply: boolean): Promise<MergeSummary> {
+  const storage = requirePool('combining with another phone');
+  const header = new TextDecoder().decode(bytes.subarray(0, 16));
+  if (header !== SQLITE_HEADER) throw new Error('This file is not a household backup.');
+
+  await storage.importDb(MERGE_TEMP, bytes);
+  try {
+    checkBackup(storage, MERGE_TEMP);
+    const other = new storage.OpfsSAHPoolDb(MERGE_TEMP);
+    try {
+      migrate('main', HOUSEHOLD_MIGRATIONS, other);
+    } finally {
+      other.close();
+    }
+    const database = requireDb();
+    database.exec(`ATTACH DATABASE '${uri(MERGE_TEMP)}' AS other`);
+    try {
+      return runMerge(database, apply);
+    } finally {
+      database.exec('DETACH DATABASE other');
+    }
+  } finally {
+    storage.unlink(MERGE_TEMP);
+  }
+}
+
 /** Deletes everything fetched from outside, and the slates built from it. */
 function clearCache(): void {
   batch([
@@ -244,6 +278,8 @@ async function handle(request: DbRequest): Promise<DbResponse> {
         return { id: request.id, ok: true, result: await exportHousehold() };
       case 'importHousehold':
         return { id: request.id, ok: true, result: await importHousehold(request.bytes) };
+      case 'mergeHousehold':
+        return { id: request.id, ok: true, result: await mergeHousehold(request.bytes, request.apply) };
       case 'clearCache':
         clearCache();
         return { id: request.id, ok: true, result: null };

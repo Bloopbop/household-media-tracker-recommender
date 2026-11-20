@@ -1,8 +1,9 @@
 // Backups are a copy of household.db without device-only data (API keys and
 // the launch counter). They never include cache.db.
 
-import { exportHousehold, importHousehold, setSetting } from './db';
+import { exportHousehold, importHousehold, mergeHousehold, setSetting } from './db';
 import { localToday } from './library';
+import type { MergeSummary } from './merge';
 
 export async function createBackupFile(): Promise<File> {
   const bytes = await exportHousehold();
@@ -69,4 +70,28 @@ export async function restoreBackup(file: File): Promise<number> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const { titles } = await importHousehold(bytes);
   return titles;
+}
+
+/**
+ * Combines the other phone's backup into this one (merge.ts). With apply
+ * false nothing changes, and the summary says what combining would add.
+ */
+export async function combineBackup(file: File, apply: boolean): Promise<MergeSummary> {
+  return mergeHousehold(new Uint8Array(await file.arrayBuffer()), apply);
+}
+
+/** "2 titles, 5 ratings and 12 reactions": what a combine adds, in words. Empty when nothing. */
+export function describeMerge(summary: MergeSummary): string {
+  const parts: [number, string, string][] = [
+    [summary.titles, 'new title', 'new titles'],
+    [summary.details, 'title with newer details', 'titles with newer details'],
+    [summary.ratings, 'rating', 'ratings'],
+    [summary.statuses, 'status', 'statuses'],
+    [summary.watches, 'watch', 'watches'],
+    [summary.notes, 'note', 'notes'],
+    [summary.reactions, 'reaction to a pick', 'reactions to picks'],
+  ];
+  const words = parts.filter(([count]) => count > 0).map(([count, one, many]) => `${count} ${count === 1 ? one : many}`);
+  if (words.length === 0) return summary.signals > 0 ? 'records of picks seen on the other phone' : '';
+  return words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
