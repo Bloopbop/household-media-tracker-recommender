@@ -1,6 +1,7 @@
 // Page-side handle to the database worker: every call is a promise.
 
 import type { DbOpenInfo, DbRequest, DbResponse, Statement } from './db.worker';
+import type { MergeSummary } from './merge';
 
 export type { DbOpenInfo, Statement };
 
@@ -53,6 +54,10 @@ export const exportHousehold = () => call<Uint8Array>({ op: 'exportHousehold' })
 
 export const importHousehold = (bytes: Uint8Array) =>
   call<{ titles: number }>({ op: 'importHousehold', bytes }, [bytes.buffer as ArrayBuffer]);
+
+/** Combines another phone's backup into this one; with apply false it only counts what would be added. */
+export const mergeHousehold = (bytes: Uint8Array, apply: boolean) =>
+  call<MergeSummary>({ op: 'mergeHousehold', bytes, apply }, [bytes.buffer as ArrayBuffer]);
 
 export const clearCache = () => call<null>({ op: 'clearCache' });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canShareFile, shareFile, ShareRefusedError, sharesOnlyKnownTypes } from './backup';
+import { canShareFile, describeMerge, shareFile, ShareRefusedError, sharesOnlyKnownTypes } from './backup';
+import { emptySummary } from './merge';
 
 const file = new File([new Uint8Array([1, 2, 3])], 'household-backup-2026-11-18.sqlite', {
   type: 'application/x-sqlite3',
@@ -47,5 +48,16 @@ describe('sharing a backup', () => {
   it('passes other failures through unchanged', async () => {
     const failed = sharing(() => Promise.reject(new TypeError('Bad data')));
     await expect(shareFile(file, failed)).rejects.toThrow('Bad data');
+  });
+});
+
+describe('saying what combining adds', () => {
+  it('list what is new in words, leave out what is not, and say when there is nothing', () => {
+    expect(describeMerge({ ...emptySummary(), titles: 2, ratings: 1, reactions: 12, signals: 40 })).toBe(
+      '2 new titles, 1 rating and 12 reactions to picks',
+    );
+    expect(describeMerge({ ...emptySummary(), statuses: 1 })).toBe('1 status');
+    expect(describeMerge({ ...emptySummary(), signals: 5 })).toBe('records of picks seen on the other phone');
+    expect(describeMerge(emptySummary())).toBe('');
   });
 });
