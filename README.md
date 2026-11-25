@@ -3,12 +3,14 @@
 A private, local-first app for two people to track what they watch and decide
 what to watch next. All household data stays on the device.
 
-**Status: phase 2, part 1.** The library works: add titles by search or by
-name, rate them (an agreed rating plus personal ones), track status, notes and
-watches, import the household's Obsidian vault, review the shared ratings person
-by person, and make or restore backups. The app opens on recommendations: up to
-20 picks for each person and for the two together, each with a one-line reason
-and a "Why this?" breakdown. Reacting to picks arrives in part 2.
+**Status: phase 2.** The library works: add titles by search or by name, rate
+them (an agreed rating plus personal ones), track status, notes and watches,
+import the household's Obsidian vault, review the shared ratings person by
+person, and make or restore backups. The app opens on recommendations: up to 20
+picks for each person and for the two together, each with a one-line reason and
+a "Why this?" breakdown, and four reactions under each pick. Settings → Picks
+compared judges the recommender against review scores alone, and Combine with
+the other phone shares data between the two phones until they sync.
 
 ## Recommendations
 

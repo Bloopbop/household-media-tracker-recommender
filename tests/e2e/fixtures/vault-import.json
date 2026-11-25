@@ -1,0 +1,226 @@
+{
+ "format": "hmtr-vault-import",
+ "version": 1,
+ "generated_at": "2026-11-17T14:51:18+00:00",
+ "vault": "e2e-vault",
+ "library": [
+  {
+   "title": "Docu Series",
+   "search_title": "Docu Series",
+   "title_hint": "",
+   "year": 2020,
+   "year_end": 2022,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "documentary",
+   "creators": [
+    "Doc Maker"
+   ],
+   "genres": [
+    "documentary"
+   ],
+   "source_file": "wiki/watched/movies/docu-series.md",
+   "anime": false,
+   "rating": 8.0,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "",
+   "what_works": "",
+   "what_doesnt": ""
+  },
+  {
+   "title": "Lost Film",
+   "search_title": "Lost Film",
+   "title_hint": "",
+   "year": 1980,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [],
+   "genres": [],
+   "source_file": "wiki/watched/movies/lost-film.md",
+   "anime": false,
+   "rating": 9.0,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "",
+   "what_works": "",
+   "what_doesnt": ""
+  },
+  {
+   "title": "Obscure Thing",
+   "search_title": "Obscure Thing",
+   "title_hint": "",
+   "year": 1990,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [],
+   "genres": [],
+   "source_file": "wiki/watched/movies/obscure-thing.md",
+   "anime": false,
+   "rating": 5.0,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "",
+   "what_works": "",
+   "what_doesnt": ""
+  },
+  {
+   "title": "Sample Film",
+   "search_title": "Sample Film",
+   "title_hint": "",
+   "year": 2004,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [
+    "Dee Rector"
+   ],
+   "genres": [
+    "drama"
+   ],
+   "source_file": "wiki/watched/movies/sample-film.md",
+   "anime": false,
+   "rating": 8.5,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "Rewatched it with friends; still great.",
+   "what_works": "",
+   "what_doesnt": ""
+  },
+  {
+   "title": "Twin Title",
+   "search_title": "Twin Title",
+   "title_hint": "",
+   "year": 2010,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [
+    "Ann Maker"
+   ],
+   "genres": [
+    "thriller"
+   ],
+   "source_file": "wiki/watched/movies/twin-title.md",
+   "anime": false,
+   "rating": 6.5,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "",
+   "what_works": "",
+   "what_doesnt": ""
+  },
+  {
+   "title": "Sample Show (US)",
+   "search_title": "Sample Show",
+   "title_hint": "US",
+   "year": 2011,
+   "year_end": 2015,
+   "ongoing": false,
+   "kind": "series",
+   "medium": "television",
+   "creators": [
+    "Cree Ator"
+   ],
+   "genres": [
+    "comedy"
+   ],
+   "source_file": "wiki/watched/tv-shows/sample-show.md",
+   "anime": false,
+   "rating": 7.0,
+   "rating_scope": "shared",
+   "participants": "both",
+   "status": "watched",
+   "watched_on": null,
+   "added_to_vault": null,
+   "notes": "",
+   "what_works": "",
+   "what_doesnt": ""
+  }
+ ],
+ "candidates": [
+  {
+   "title": "Maybe Later",
+   "search_title": "Maybe Later",
+   "title_hint": "",
+   "year": 1999,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [],
+   "genres": [],
+   "source_file": "wiki/recommendations/maybe-later.md",
+   "destination": "candidate_pool",
+   "vault_status": "pending",
+   "match_score": "high",
+   "scouted_date": null
+  },
+  {
+   "title": "Unclear Rec",
+   "search_title": "Unclear Rec",
+   "title_hint": "",
+   "year": 2001,
+   "year_end": null,
+   "ongoing": false,
+   "kind": "movie",
+   "medium": "film",
+   "creators": [],
+   "genres": [],
+   "source_file": "wiki/recommendations/unclear-rec.md",
+   "destination": "candidate_pool",
+   "vault_status": "pending",
+   "match_score": "speculative",
+   "scouted_date": null
+  }
+ ],
+ "not_interested": [
+  {
+   "title": "Not For Us",
+   "year": 2020,
+   "dismissed_on": "2026-05-11",
+   "source_file": "wiki/dismissed.md"
+  }
+ ],
+ "needs_review": [
+  {
+   "file": "wiki/watched/movies/docu-series.md",
+   "title": "Docu Series",
+   "issue": "film with a range of years",
+   "detail": "may cover more than one film; split into separate titles by hand"
+  },
+  {
+   "file": "wiki/watched/movies/sample-film.md",
+   "title": "Sample Film",
+   "issue": "mentions a rewatch",
+   "detail": "set the rewatch flag by hand if it applies"
+  },
+  {
+   "file": "wiki/watched/tv-shows/sample-show.md",
+   "title": "Sample Show (US)",
+   "issue": "title has a qualifier in brackets",
+   "detail": "search as 'Sample Show' and pick the 'US' entry"
+  }
+ ]
+}
