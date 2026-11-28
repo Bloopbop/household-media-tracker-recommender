@@ -13,7 +13,13 @@
 <section aria-labelledby="credits">
   <h2 id="credits">Data credits</h2>
   <div class="panel credit">
-    <!-- TMDB requires its logo here. Add the approved file from TMDB's logos page as public/tmdb-logo.svg. -->
+    <img
+      class="tmdb-logo"
+      src="{import.meta.env.BASE_URL}tmdb-logo.svg"
+      alt="TMDB"
+      width="190"
+      height="82"
+    />
     <p class="tmdb-notice">
       This application uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
     </p>
@@ -48,6 +54,12 @@
   }
   .credit {
     padding: 1rem;
+  }
+  .tmdb-logo {
+    display: block;
+    width: 7.5rem;
+    height: auto;
+    margin-bottom: 0.75rem;
   }
   .tmdb-notice {
     margin: 0;
