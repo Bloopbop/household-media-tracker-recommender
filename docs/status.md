@@ -1,6 +1,6 @@
 # Status
 
-What is waiting on someone, as of 2026-11-24. The build status, decisions and
+What is waiting on someone, as of 2026-11-28. The build status, decisions and
 phone results are in the product spec (a Claude doc, linked from the project
 instructions); this file is the short list a new conversation starts from.
 
@@ -16,7 +16,6 @@ instructions); this file is the short list a new conversation starts from.
   their own.
 - **Picks compared:** the gate can be judged from 4 December 2026, once there
   are 14 days of mixed lists and 40 counted reactions. Paste the result.
-- **About page:** the TMDB logo file, still to be supplied.
 - **Spec doc:** six suggested edits are waiting for review.
 
 ## Next
